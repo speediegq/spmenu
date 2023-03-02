@@ -26,6 +26,7 @@ On top of this, you can specify arguments to change the behavior of spmenu. See 
 - spmenu -f             - Grabs keyboard before reading stdin
 - spmenu -F             - Enable fuzzy matching
 - spmenu -P             - Hide characters
+- spmenu -Ps symbol     - Set the password symbol to symbol
 - spmenu -p text        - Set spmenu prompt text to text
 - spmenu -a             - Enable alpha
 - spmenu -na            - Disable alpha
@@ -49,8 +50,20 @@ On top of this, you can specify arguments to change the behavior of spmenu. See 
 - spmenu -c             - Position spmenu at the center of the screen
 - spmenu -hm            - Hide mode indicator
 - spmenu -hmc           - Hide match count
+- spmenu -hla           - Hide left arrow
+- spmenu -hra           - Hide right arrow
+- spmenu -hpr           - Hide prompt
+- spmenu -hc            - Hide cursor
+- spmenu -hhl           - Hide highlight
+- spmenu -hi            - Hide image
 - spmenu -sm            - Show mode indicator
 - spmenu -smc           - Show match count
+- spmenu -sla           - Show left arrow
+- spmenu -sra           - Show right arrow
+- spmenu -spr           - Show prompt
+- spmenu -sc            - Show cursor
+- spmenu -shl           - Show highlight
+- spmenu -si            - Show image
 - spmenu -xrdb          - Load .Xresources on runtime
 - spmenu -w window id   - Embed spmenu inside window id
 - spmenu -H hist file   - Specify a path to save the history to

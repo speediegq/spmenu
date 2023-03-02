@@ -5,6 +5,7 @@
 
 /* spmenu options */
 static char class[]                    = "spmenu"; /* Class for spmenu */
+static int fast                        = 0; /* Grab keyboard first */
 static int xresources                  = 1; /* Enable .Xresources support */
 
 /* Window options */
@@ -40,6 +41,7 @@ static char font[]                     = "Noto Sans Mono 8"; /* Font to draw tex
 /* Symbol options */
 static char *leftarrow                 = "<"; /* Left arrow, used to indicate you can move to the left */
 static char *rightarrow                = ">"; /* Right arrow, used to indicate you can move to the right */
+static char *password                  = "."; /* Password character, when the -P argument is active this will replace all characters typed */
 
 /* Match options */
 static int type                        = 1; /* Allow typing into spmenu or only allow keybinds. */
@@ -64,7 +66,12 @@ static char *prompt                    = NULL; /* Default prompt, set to NULL (n
 /* Hide options */
 static int hidematchcount              = 0; /* Hide match count (0/1) */
 static int hidemode                    = 0; /* Hide mode (0/1) */
+static int hidelarrow                  = 0; /* Hide left arrow (0/1) */
+static int hiderarrow                  = 0; /* Hide right arrow (0/1) */
+static int hideprompt                  = 0; /* Hide prompt (0/1) */
+static int hidecursor                  = 0; /* Hide cursor (0/1) */
 static int hidehighlight               = 0; /* Hide highlight (0/1) */
+static int hideimage                   = 0; /* Hide image (0/1) */
 
 /* Color options
  *
@@ -131,11 +138,13 @@ static char col_sgrcolor13[]           = "#ff00ff"; /* SGR color #13 */
 static char col_sgrcolor14[]           = "#00ffff"; /* SGR color #14 */
 static char col_sgrcolor15[]           = "#ffffff"; /* SGR color #15 */
 
+/* Pango options */
 static int pango_item                  = 1; /* Enable support for pango markup for the items */
+static int pango_highlight             = 1; /* Enable support for pango markup for the highlighting */
 static int pango_prompt                = 1; /* Enable support for pango markup for the prompt */
 static int pango_input                 = 1; /* Enable support for pango markup for user input */
 static int pango_leftarrow             = 1; /* Enable support for pango markup for the left arrow */
-static int pango_rightarrow            = 1; /* Enable support for pango markup for the right arrow */
+static int pango_rightarrow            = 0; /* Enable support for pango markup for the right arrow */
 static int pango_numbers               = 1; /* Enable support for pango markup for the match count */
 static int pango_mode                  = 1; /* Enable support for pango markup for the mode indicator */
 static int pango_password              = 1; /* Enable support for pango markup for the password text */

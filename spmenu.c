@@ -23,16 +23,20 @@
 #define USEIMAGE 1
 #endif
 
+/* check if we should enable multimonitor support using xinerama */
 #ifdef XINERAMA
 #define USEXINERAMA 1
 #else
 #define USEXINERAMA 0
 #endif
 
+
+/* include right to left language library */
 #if USERTL
 #include <fribidi.h>
 #endif
 
+/* include libraries used for image support */
 #if USEIMAGE
 #include <errno.h>
 #include <pwd.h>
@@ -40,6 +44,7 @@
 #include <openssl/md5.h>
 #endif
 
+/* include xinerama */
 #if USEXINERAMA
 #include <X11/extensions/Xinerama.h>
 #endif
@@ -88,6 +93,7 @@ static char text[BUFSIZ] = "";
 struct item {
 	char *text;
     char *image;
+    char *ex;
 	struct item *left, *right;
 	double distance;
 };
@@ -120,6 +126,12 @@ static struct item *matches, *matchend;
 static struct item *prev, *curr, *next, *sel;
 static int mon = -1, screen;
 static int managed = 0;
+
+#if USERTL
+static int isrtl = 1;
+#else
+static int isrtl = 0;
+#endif
 
 #include "libs/mode.h"
 
@@ -159,11 +171,14 @@ static void quit(const Arg *arg);
 static void complete(const Arg *arg);
 static void savehistory(char *input);
 static void setimgsize(const Arg *arg);
+static void toggleimg(const Arg *arg);
 
 static void drawmenu(void);
 static void calcoffsets(void);
 static void run(void);
 static void readstdin(void);
+static void recalculatenumbers(void);
+static void usage(void);
 
 #include "libs/xrdb.h"
 
@@ -179,6 +194,8 @@ static char *(*fstrstr)(const char *, const char *) = cistrstr;
 
 #include "libs/xrdb.c"
 #include "libs/mode.c"
+#include "libs/client.h"
+#include "libs/client.c"
 
 #if USEIMAGE
 static int longestedge = 0; /* longest edge */
@@ -190,26 +207,45 @@ static int longestedge = 0; /* longest edge */
 #include "libs/rtl.h"
 #include "libs/rtl.c"
 #endif
+#include "libs/draw.c"
+#include "libs/schemes.c"
+#include "libs/argv.h"
+#include "libs/argv.c"
 
 void
 setimgsize(const Arg *arg)
 {
-#if !USEIMAGE
+    #if !USEIMAGE
     return;
-#endif
+    #endif
 
-    if (image) {
-        imlib_free_image();
-        image = NULL;
-    }
+    cleanupimg();
 
     imageheight += arg->i;
     imagewidth += arg->i;
 
-    if (!imageheight || !imagewidth)
-        imageheight = imagewidth = 1;
+    if (!imageheight || !imagewidth || !longestedge) {
+        imageheight = imagewidth = longestedge = 1;
+        return;
+    }
 
     drawmenu();
+    drawimage();
+}
+
+void
+toggleimg(const Arg *arg)
+{
+    #if !USEIMAGE
+    return;
+    #endif
+
+    cleanupimg();
+
+    hideimage = !hideimage;
+
+    drawmenu();
+    drawimage();
 }
 
 void
@@ -247,13 +283,19 @@ calcoffsets(void)
 
 	if (lines > 0)
 		n = lines * columns * bh;
-	else
-        /* hide match count */
-        if (hidematchcount) {
-		    n = mw - (promptw + inputw + TEXTW(leftarrow) + TEXTW(rightarrow) + TEXTW(modetext));
-        } else {
-            n = mw - (promptw + inputw + TEXTW(leftarrow) + TEXTW(rightarrow) + TEXTW(numbers) + TEXTW(modetext));
-        }
+	else {
+        int numberWidth = 0;
+        int modeWidth = 0;
+        int larrowWidth = 0;
+        int rarrowWidth = 0;
+
+        if (!hidematchcount) numberWidth = pango_numbers ? TEXTWM(numbers) : TEXTW(numbers);
+        if (!hidemode) modeWidth = pango_mode ? TEXTWM(modetext) : TEXTW(modetext);
+        if (!hidelarrow) larrowWidth = pango_leftarrow ? TEXTWM(leftarrow) : TEXTW(leftarrow);
+        if (!hiderarrow) rarrowWidth = pango_rightarrow ? TEXTWM(rightarrow) : TEXTW(rightarrow);
+
+		n = mw - (promptw + inputw + larrowWidth + rarrowWidth + modeWidth + numberWidth);
+    }
 	/* calculate which items will begin the next page and previous page */
 	for (i = 0, next = curr; next; next = next->right)
 		if ((i += (lines > 0) ? bh : MIN(TEXTWM(next->text), n)) > n)
@@ -278,11 +320,9 @@ cleanup(void)
 	size_t i;
 
     #if USEIMAGE
-    if (image) {
-        imlib_free_image();
-        image = NULL;
-    }
+    cleanupimg();
     #endif
+
 	XUngrabKey(dpy, AnyKey, AnyModifier, root);
 	for (i = 0; i < SchemeLast; i++)
 		free(scheme[i]);
@@ -307,249 +347,6 @@ cistrstr(const char *h, const char *n)
 			return (char *)h;
 	}
 	return NULL;
-}
-
-void
-drawhighlights(struct item *item, int x, int y, int maxw)
-{
-	char restorechar, tokens[sizeof text], *highlight,  *token;
-	int indentx, highlightlen;
-
-	drw_setscheme(drw, scheme[item == sel ? SchemeSelHighlight : SchemeNormHighlight]);
-	strcpy(tokens, text);
-	for (token = strtok(tokens, " "); token; token = strtok(NULL, " ")) {
-		highlight = fstrstr(item->text, token);
-		while (highlight) {
-			// Move item str end, calc width for highlight indent, & restore
-			highlightlen = highlight - item->text;
-			restorechar = *highlight;
-			item->text[highlightlen] = '\0';
-			indentx = TEXTW(item->text);
-			item->text[highlightlen] = restorechar;
-
-			// Move highlight str end, draw highlight, & restore
-			restorechar = highlight[strlen(token)];
-			highlight[strlen(token)] = '\0';
-			if (indentx - (lrpad / 2) - 1 < maxw)
-				drw_text(
-					drw,
-					x + indentx - (lrpad / 2) - 1,
-					y,
-					MIN(maxw - indentx, TEXTW(highlight) - lrpad),
-					bh, 0, highlight, 0, True
-				);
-			highlight[strlen(token)] = restorechar;
-
-			if (strlen(highlight) - strlen(token) < strlen(token)) break;
-			highlight = fstrstr(highlight + strlen(token), token);
-		}
-	}
-}
-
-int
-drawitem(struct item *item, int x, int y, int w)
-{
-    char buffer[sizeof(item->text) + lrpad / 2];
-    Clr scm[3];
-    int lp = lrpad / 2; /* padding */
-    int wr, rd;
-	int rw; /* width of text */
-	int fg = 7;
-	int bg = 0;
-    int bgfg = 0;
-    int ib = 0;
-
-    if (item == sel) {
-        memcpy(scm, scheme[SchemeItemSel], sizeof(scm));
-    } else {
-        memcpy(scm, scheme[SchemeItemNorm], sizeof(scm));
-    }
-
-    /* set scheme */
-    drw_setscheme(drw, scm);
-
-    /* parse item text */
-	for (wr = 0, rd = 0; item->text[rd]; rd++) {
-		if (item->text[rd] == '' && item->text[rd + 1] == '[') {
-			size_t alen = strspn(item->text + rd + 2,
-					     "0123456789;");
-			if (item->text[rd + alen + 2] == 'm') { /* character is 'm' which is the last character in the sequence */
-				buffer[wr] = '\0'; /* clear out character */
-
-                /* draw text */
-                rw = TEXTWM(buffer) - lrpad;
-                #if USERTL
-                apply_fribidi(buffer);
-				drw_text(drw, x, y, rw + lp, bh, lp, fribidi_text, 0, pango_item ? True : False);
-                #else
-				drw_text(drw, x, y, rw + lp, bh, lp, buffer, 0, pango_item ? True : False);
-                #endif
-
-				x += rw + lp;
-                ib = 1;
-                lp = 0; /* no padding */
-
-				char *ep = item->text + rd + 1;
-
-                /* parse hex colors in scm */
-				while (*ep != 'm') {
-					unsigned v = strtoul(ep + 1, &ep, 10);
-					if (v == 1) {
-						fg |= 8;
-						scm[0] = textclrs[fg];
-					} else if (v == 22) {
-						fg &= ~8;
-						scm[0] = textclrs[fg];
-					} else if (v >= 30 && v <= 37) {
-						fg = v % 10 | (fg & 8);
-						scm[0] = textclrs[fg];
-                    } else if (v == 38) {
-						bgfg = 2;
-					} else if (v >= 40 && v <= 47) {
-						bg = v % 10;
-						scm[1] = textclrs[bg];
-					} else if (v == 48) {
-                        bgfg = 3;
-                    }
-				}
-
-				rd += alen + 2;
-				wr = 0;
-
-				drw_setscheme(drw, scm);
-
-				continue;
-			}
-		}
-
-		buffer[wr++] = item->text[rd];
-	}
-
-	buffer[wr] = '\0';
-
-    /* draw any text that doesn't use sgr sequences */
-    #if USERTL
-    apply_fribidi(buffer);
-	int r = drw_text(drw, x, y, w - rw, bh, lp, fribidi_text, 0, pango_item ? True : False);
-    #else
-	int r = drw_text(drw, x, y, w - rw, bh, lp, buffer, 0, pango_item ? True : False);
-    #endif
-
-    if (!hidehighlight && !ib) drawhighlights(item, x, y, w - rw);
-    return r;
-}
-
-char
-sixd_to_8bit(int x)
-{
-	return x == 0 ? 0 : 0x37 + 0x28 * x;
-}
-
-void
-drawmenu(void)
-{
-	unsigned int curpos;
-	struct item *item;
-	int x = 0, y = 0, fh = drw->font->h, w;
-	char *censort;
-
-	drw_setscheme(drw, scheme[SchemeMenu]);
-	drw_rect(drw, 0, 0, mw, mh, 1, 1);
-
-    if (hidemode)
-        strcpy(modetext, "");
-
-	if (prompt && *prompt) {
-        if (colorprompt) {
-		    drw_setscheme(drw, scheme[SchemePrompt]);
-        }
-
-		x = drw_text(drw, x, 0, promptw, bh, lrpad / 2, prompt, 0, pango_prompt ? True : False);
-	}
-	/* draw input field */
-	w = (lines > 0 || !matches) ? mw - x : inputw;
-	drw_setscheme(drw, scheme[SchemeInput]);
-	if (passwd) {
-	    censort = ecalloc(1, sizeof(text));
-		memset(censort, '.', strlen(text));
-        #if USERTL
-        apply_fribidi(censort);
-		drw_text(drw, x, 0, w, bh, lrpad / 2, fribidi_text, 0, pango_password ? True : False);
-        #else
-		drw_text(drw, x, 0, w - LENGTH(censort), bh, lrpad / 2, censort, 0, pango_password ? True : False);
-        #endif
-        free(censort);
-	} else {
-        #if USERTL
-        apply_fribidi(text);
-        drw_text(drw, x, 0, w, bh, lrpad / 2, fribidi_text, 0, pango_input ? True : False);
-        #else
-        drw_text(drw, x, 0, w, bh, lrpad / 2, text, 0, pango_input ? True : False);
-        #endif
-    }
-
-	curpos = TEXTW(text) - TEXTW(&text[cursor]);
-	if ((curpos += lrpad / 2 - 1) < w) {
-		drw_setscheme(drw, scheme[SchemeCaret]);
-		drw_rect(drw, x + curpos, 2 + (bh - fh) / 2, 2, fh - 4, 1, 0);
-	}
-
-    /* get match count */
-    if (!hidematchcount) recalculatenumbers();
-
-	if (lines > 0) {
-        #if USEIMAGE
-        if (longestedge) {
-            x += imagegaps + imagewidth;
-        }
-        #endif
-		/* draw grid */
-		int i = 0;
-		for (item = curr; item != next; item = item->right, i++)
-			drawitem(
-				item,
-				x + ((i / lines) *  ((mw - x) / columns)),
-				y + (((i % lines) + 1) * bh),
-				(mw - x) / columns
-			);
-	} else if (matches) {
-		/* draw horizontal list */
-		x += inputw;
-		w = TEXTW(leftarrow);
-		if (curr->left) {
-			drw_setscheme(drw, scheme[SchemeLArrow]);
-			drw_text(drw, x, 0, w, bh, lrpad / 2, leftarrow, 0, pango_leftarrow ? True : False);
-		}
-		x += w;
-		for (item = curr; item != next; item = item->right)
-            if (hidematchcount) {
-                x = drawitem(item, x, 0, MIN(TEXTWM(item->text), mw - x - TEXTW(rightarrow) - TEXTW(modetext)));
-            } else {
-                x = drawitem(item, x, 0, MIN(TEXTWM(item->text), mw - x - TEXTW(rightarrow) - TEXTW(numbers) - TEXTW(modetext)));
-            }
-		if (next) {
-			w = TEXTW(rightarrow);
-			drw_setscheme(drw, scheme[SchemeRArrow]);
-
-            if (hidematchcount) {
-                drw_text(drw, mw - w - TEXTW(modetext), 0, w, bh, lrpad / 2, rightarrow, 0, pango_rightarrow ? True : False);
-            } else {
-                drw_text(drw, mw - w - TEXTW(numbers) - TEXTW(modetext), 0, w, bh, lrpad / 2, rightarrow, 0, pango_rightarrow ? True : False);
-            }
-		}
-	}
-
-    if (!hidematchcount) {
-        drw_setscheme(drw, scheme[SchemeNumber]);
-        drw_text(drw, mw - TEXTW(numbers) - TEXTW(modetext), 0, TEXTW(numbers), bh, lrpad / 2, numbers, 0, pango_numbers ? True : False);
-    }
-
-    if (!hidemode) {
-        drw_setscheme(drw, scheme[SchemeMode]);
-        drw_text(drw, mw - TEXTW(modetext), 0, TEXTW(modetext), bh, lrpad / 2, modetext, 0, pango_mode ? True : False);
-    }
-
-	drw_map(drw, win, 0, 0, mw, mh);
 }
 
 void
@@ -832,7 +629,7 @@ loadhistory(void)
 }
 
 void
-navighistory(int dir)
+navigatehistfile(int dir)
 {
 	static char def[BUFSIZ];
 	char *p = NULL;
@@ -1022,7 +819,7 @@ moveend(const Arg *arg)
 void
 navhistory(const Arg *arg)
 {
-    navighistory(arg->i);
+    navigatehistfile(arg->i);
     drawmenu();
 }
 
@@ -1434,7 +1231,8 @@ readstdin(void)
 			imax = i;
 		}
 
-#if USEIMAGE
+        /* parse image markup */
+        #if USEIMAGE
         if(!strncmp("IMG:", items[i].text, strlen("IMG:"))) {
             if(!(items[i].image = malloc(strlen(items[i].text)+1)))
                 fprintf(stderr, "spmenu: cannot malloc %lu bytes\n", strlen(items[i].text));
@@ -1452,24 +1250,43 @@ readstdin(void)
 
         if (generatecache && longestedge <= 256 && items[i].image && strcmp(items[i].image, limg?limg:"")) {
             loadimagecache(items[i].image, &w, &h);
-            fprintf(stdout, "-!- Generating thumbnail for: %s\n", items[i].image);
+            fprintf(stdout, "spmenu: generating thumbnail for: %s\n", items[i].image);
         }
 
         if(items[i].image)
             limg = items[i].image;
-#endif
+        #endif
+
+        /* todo: use this for something
+         * current usage is not very useful, however it's here to be used later.
+         */
+        if(!(items[i].ex = malloc(strlen(items[i].text)+1)))
+                fprintf(stderr, "spmenu: cannot malloc %lu bytes\n", strlen(items[i].text));
+        if (!strncmp("spmenu:", items[i].text, strlen("spmenu:"))) {
+            if (sscanf(items[i].text, "spmenu:%[^\t]", items[i].ex)) {
+                items[i].text += strlen("spmenu:")+strlen(items[i].ex)+1;
+            }
+
+            if (!strncmp("version", items[i].ex, strlen("version"))) {
+                die("spmenu version %s", VERSION);
+            }
+
+            if (!strncmp("license", items[i].ex, strlen("license"))) {
+                die("spmenu is licensed under the MIT license. See the included LICENSE file for more information.");
+            }
+        }
 	}
 
 	if (items) {
-#if USEIMAGE
+        #if USEIMAGE
         items[i].image = NULL;
-#endif
+        #endif
 		items[i].text = NULL;
     }
-#if USEIMAGE
-    if (!limg)
-        longestedge = imagegaps = 0;
-#endif
+
+    #if USEIMAGE
+    if (!limg) longestedge = imagegaps = 0;
+    #endif
 	inputw = items ? TEXTWM(items[imax].text) : 0;
 	lines = MIN(lines, i);
 }
@@ -1478,10 +1295,6 @@ void
 run(void)
 {
 	XEvent ev;
-    #if USEIMAGE
-    int width = 0, height = 0;
-	char *limg = NULL;
-    #endif
 
 	while (!XNextEvent(dpy, &ev)) {
 		if (XFilterEvent(&ev, win))
@@ -1517,45 +1330,9 @@ run(void)
 			break;
 		}
 
-#if USEIMAGE
-        if (!lines)
-            continue;
-
-        if (sel && sel->image && strcmp(sel->image, limg ? limg : "")) {
-            if (longestedge)
-                loadimagecache(sel->image, &width, &height);
-        } else if ((!sel || !sel->image) && image) {
-            imlib_free_image();
-            image = NULL;
-        } if (image && longestedge) {
-            int leftmargin = imagegaps;
-
-           	if(mh != bh + height + imagegaps * 2) {
-			    resizetoimageheight(height);
-		    }
-
-            if (!imageposition) { /* top mode = 0 */
-                if (height > width)
-                    width = height;
-                imlib_render_image_on_drawable(leftmargin+(imagewidth-width)/2, bh+imagegaps);
-            } else if (imageposition == 1) { /* bottom mode = 1 */
-                if (height > width)
-                    width = height;
-                imlib_render_image_on_drawable(leftmargin+(imagewidth-width)/2, mh-height-imagegaps);
-            } else if (imageposition == 2) { /* center mode = 2 */
-                imlib_render_image_on_drawable(leftmargin+(imagewidth-width)/2, (mh-bh-height)/2+bh);
-            } else {
-                int minh = MIN(height, mh-bh-imagegaps*2);
-                imlib_render_image_on_drawable(leftmargin+(imagewidth-width)/2, (minh-height)/2+bh+imagegaps);
-            }
-
-
-        } if (sel) {
-            limg = sel->image;
-        } else {
-            limg = NULL;
-        }
-#endif
+        #if USEIMAGE
+        drawimage();
+        #endif
 	}
 }
 
@@ -1567,66 +1344,18 @@ setup(void)
     unsigned int tmp, minstrlen = 0, curstrlen = 0;
     int numwidthchecks = 100;
     struct item *item;
-	XSetWindowAttributes swa;
 	XIM xim;
 	Window w, dw, *dws;
-	XWindowAttributes wa;
-	XClassHint ch = { class, class };
     #if USEXINERAMA
 	XineramaScreenInfo *info;
 	Window pw;
 	int a, di, n, area = 0;
     #endif
+    XWindowAttributes wa;
     char cbuf[8];
-	/* init appearance */
-	for (j = 0; j < SchemeLast; j++) {
-		scheme[j] = drw_scm_create(drw, colors[j], alphas[j], 2);
-    }
 
-    for (i = 0; i < LENGTH(textcolors) && i < LENGTH(textclrs); i++)
- 		drw_clr_create(drw, &textclrs[i], textcolors[i], 0);
-	if (i == 0 && colorsupport)
-		drw_clr_create(drw, &textclrs[i++], "#000000", 0);
-	for (; i < 7; i++) {
-        if (!colorsupport)
-            break;
-		snprintf(cbuf, sizeof(cbuf), "#%02x%02x%02x",
-			 !!(i & 1) * 0x7f,
-			 !!(i & 2) * 0x7f,
-			 !!(i & 4) * 0x7f);
-		drw_clr_create(drw, &textclrs[i], cbuf, 0);
-	}
-	if (i == 7 && colorsupport)
-		drw_clr_create(drw, &textclrs[i++], "#000000", 0);
-	if (i == 8 && colorsupport)
-		drw_clr_create(drw, &textclrs[i++], "#333333", 0);
-	for (; i < 16; i++) {
-        if (!colorsupport)
-            break;
-		snprintf(cbuf, sizeof(cbuf), "#%02x%02x%02x",
-			 !!(i & 1) * 0xff,
-			 !!(i & 2) * 0xff,
-			 !!(i & 4) * 0xff);
-		drw_clr_create(drw, &textclrs[i], cbuf, 0);
-	}
-	for (; i < 6 * 6 * 6 + 16; i++) {
-        if (!colorsupport)
-            break;
-		snprintf(cbuf, sizeof(cbuf), "#%02x%02x%02x",
-			 sixd_to_8bit(((i - 16) / 36) % 6),
-			 sixd_to_8bit(((i - 16) / 6) % 6),
-			 sixd_to_8bit(((i - 16)) % 6));
-		drw_clr_create(drw, &textclrs[i], cbuf, 0);
-	}
-	for (; i < 256; i++) {
-        if (!colorsupport)
-            break;
-		snprintf(cbuf, sizeof(cbuf), "#%02x%02x%02x",
-			 0x08 + (i - 6 * 6 * 6 - 16) * 0x0a,
-			 0x08 + (i - 6 * 6 * 6 - 16) * 0x0a,
-			 0x08 + (i - 6 * 6 * 6 - 16) * 0x0a);
-		drw_clr_create(drw, &textclrs[i], cbuf, 0);
-	}
+    /* init appearance */
+    init_appearance();
 
 	clip = XInternAtom(dpy, "CLIPBOARD",   False);
 	utf8 = XInternAtom(dpy, "UTF8_STRING", False);
@@ -1643,10 +1372,12 @@ setup(void)
 	bh = drw->font->h + 2 + reqlineheight;
 	lines = MAX(lines, 0);
     reallines = lines;
-#if USEIMAGE
+
+    #if USEIMAGE
     if (image)
         resizetoimageheight(imageheight);
-#endif
+    #endif
+
 	mh = (lines + 1) * bh;
 	promptw = (prompt && *prompt) ? TEXTWM(prompt) - lrpad / 4 : 0;
 
@@ -1693,12 +1424,10 @@ setup(void)
 		if (centered) {
 			mw = MIN(MAX(max_textw() + promptw, minwidth), info[i].width);
 			x = info[i].x_org + ((info[i].width  - mw) / 2);
-			//y = info[i].y_org + 0;
 			y = info[i].y_org + ((info[i].height - mh) / 2);
 		} else {
 		    x = info[i].x_org + dmx;
 			y = info[i].y_org + (menuposition ? 0 : info[i].height - mh - dmy);
-			//y = info[i].y_org + 0;
 			mw = (dmw>0 ? dmw : info[i].width);
 		}
 
@@ -1727,40 +1456,12 @@ setup(void)
 	match();
 
 	/* create menu window */
-	swa.override_redirect = managed ? False : True;
-	swa.background_pixel = 0;
-	swa.colormap = cmap;
-	swa.event_mask = ExposureMask | KeyPressMask | VisibilityChangeMask | ButtonPressMask | PointerMotionMask;
-
-	if (!bordercentered) {
-	win = XCreateWindow(dpy, parentwin, x + sp, y + vp, mw - 2 * sp, mh, borderwidth,
-	                    depth, InputOutput, visual,
-						CWOverrideRedirect|CWBackPixel|CWBorderPixel|CWColormap|CWEventMask, &swa);
-    } else {
-		if (!centered) {
-				win = XCreateWindow(dpy, parentwin, x + sp, y + vp, mw - 2 * sp, mh, 0,
-						depth, InputOutput, visual,
-						CWOverrideRedirect|CWBackPixel|CWBorderPixel|CWColormap|CWEventMask, &swa);
-		} else {
-				win = XCreateWindow(dpy, parentwin, x + sp, y + vp, mw - 2 * sp, mh, borderwidth,
-	                    depth, InputOutput, visual,
-						CWOverrideRedirect|CWBackPixel|CWBorderPixel|CWColormap|CWEventMask, &swa);
-				}
-
-    }
-    XSetWindowBorder(dpy, win, scheme[SchemeBorder][ColBg].pixel);
-	XSetClassHint(dpy, win, &ch);
-   	XChangeProperty(dpy, win, types, XA_ATOM, 32, PropModeReplace, (unsigned char *) &dock, 1);
+    create_window(x + sp, y + vp, mw - 2 * sp, mh);
+    set_window();
+    set_prop();
 
     #if USEIMAGE
-    imlib_set_cache_size(8192 * 1024);
-	imlib_context_set_blend(1);
-	imlib_context_set_dither(1);
-	imlib_set_color_usage(128);
-	imlib_context_set_display(dpy);
-	imlib_context_set_visual(visual);
-	imlib_context_set_colormap(cmap);
-	imlib_context_set_drawable(win);
+    setimageopts();
     #endif
 
 	/* input methods */
@@ -1784,354 +1485,12 @@ setup(void)
 	drawmenu();
 }
 
-void
-usage(void)
-{
-	fputs("spmenu: dynamic menu\n\n"
-		  "- Arguments -\n"
-		  "spmenu -l <line>      Set line count to stdin\n"
-		  "spmenu -h <height>    Set spmenu line height to <height>\n"
-		  "spmenu -g <grid>      Set the number of grids to <grid>\n"
-          "spmenu -gc            Generate image cache\n"
-          "spmenu -rw            Enable relative input width\n"
-          "spmenu -nrw           Disable relative input width\n"
-          "spmenu -f             Grabs keyboard before reading stdin\n"
-		  "spmenu -F             Enable fuzzy matching\n"
-		  "spmenu -P             Hide characters\n"
-		  "spmenu -p <text>      Set spmenu prompt text to <text>\n"
-          "spmenu -a             Enable alpha\n"
-          "spmenu -na            Disable alpha\n"
-          "spmenu -cp            Color prompt\n"
-          "spmenu -ncp           Don't color prompt\n"
-          "spmenu -tp            Allow the user to type\n"
-          "spmenu -nt            Don't allow typing, the user must select an option\n"
-		  "spmenu -x <x offset>  Offset spmenu x position by <x offset>\n"
-		  "spmenu -y <y offset>  Offset spmenu y position by <y offset>\n"
-          "spmenu -n <line>      Preselect <line> in the list of items\n"
-		  "spmenu -z <width>     Width of the spmenu window\n"
-          "spmenu -nmt <text>    Set normal mode text to <text>\n"
-          "spmenu -imt <text>    Set insert mode text to <text>\n"
-		  "spmenu -bw            Width of the border. 0 will disable the border\n"
-		  "spmenu -s             Use case-sensitive matching\n"
-		  "spmenu -i             Use case-insensitive matching\n"
-          "spmenu -nm            Start spmenu in normal mode\n"
-          "spmenu -im            Start spmenu in insert mode\n"
-		  "spmenu -t             Position spmenu at the top of the screen\n"
-		  "spmenu -b             Position spmenu at the bottom of the screen\n"
-		  "spmenu -c             Position spmenu at the center of the screen\n"
-          "spmenu -hm            Hide mode indicator\n"
-          "spmenu -hmc           Hide match count\n"
-          "spmenu -sm            Show mode indicator\n"
-          "spmenu -smc           Show match count\n"
-          "spmenu -xrdb          Load .Xresources on runtime\n"
-          "spmenu -nxrdb         Don't load .Xresources on runtime\n"
-		  "spmenu -m <monitor>   Specify a monitor to run spmenu on\n"
-		  "spmenu -w <window id> Embed spmenu inside <window id>\n"
-		  "spmenu -H <hist file> Specify a path to save the history to\n"
-          "spmenu -ig <gaps>     Set image gaps to <gaps>\n"
-		  "spmenu -lp <padding>  Set the vertical padding\n"
-		  "spmenu -hp <padding>  Set the horizontal padding\n"
-          "spmenu -la <symbol>   Set the left arrow to <symbol>\n"
-          "spmenu -ra <symbol>   Set the right arrow to <symbol>\n"
-          "spmenu -is <size>     Image size\n"
-          "spmenu -it            Position the image at the top\n"
-          "spmenu -ib            Position the image at the bottom\n"
-          "spmenu -ic            Position the image in the center\n"
-          "spmenu -itc           Position the image in the top center\n"
-          "spmenu -wm            Spawn spmenu as a window manager controlled client/window. Useful for testing\n"
-          "spmenu -v             Print spmenu version to stdout\n"
-          "\n", stdout);
-          fputs("- Appearance arguments -\n"
-		  "spmenu -fn  <font>    Set the spmenu font to <font>\n"
-          "spmenu -nif <color>   Set the normal item foreground color\n"
-          "spmenu -nib <color>   Set the normal item background color\n"
-          "spmenu -sif <color>   Set the selected item foreground color\n"
-          "spmenu -sib <color>   Set the selected item background color\n"
-          "spmenu -pfg <color>   Set the prompt foreground color\n"
-          "spmenu -pbg <color>   Set the prompt background color\n"
-          "spmenu -ifg <color>   Set input foreground color\n"
-          "spmenu -ibg <color>   Set input background color\n"
-          "spmenu -mbg <color>   Set the menu background color\n"
-		  "spmenu -nhf <color>   Set the normal highlight foreground color\n"
-		  "spmenu -nhb <color>   Set the normal highlight background color\n"
-		  "spmenu -shf <color>   Set the selected highlight foreground color\n"
-		  "spmenu -shb <color>   Set the selected highlight background color\n"
-		  "spmenu -shb <color>   Set the selected highlight background color\n"
-          "spmenu -nfg <color>   Set the foreground color for the match count\n"
-          "spmenu -nbg <color>   Set the background color for the match count\n"
-          "spmenu -mfg <color>   Set the foreground color for the mode indicator\n"
-          "spmenu -mbg <color>   Set the background color for the mode indicator\n"
-          "spmenu -laf <color>   Set the left arrow foreground color\n"
-          "spmenu -raf <color>   Set the right arrow foreground color\n"
-          "spmenu -lab <color>   Set the left arrow background color\n"
-          "spmenu -rab <color>   Set the right arrow background color\n"
-          "spmenu -cc  <color>   Set the caret color\n"
-          "spmenu -bc  <color>   Set the border color\n"
-		  "spmenu -sgr0          Set the SGR 0 color\n"
-		  "spmenu -sgr1          Set the SGR 1 color\n"
-		  "spmenu -sgr2          Set the SGR 2 color\n"
-		  "spmenu -sgr3          Set the SGR 3 color\n"
-		  "spmenu -sgr4          Set the SGR 4 color\n"
-		  "spmenu -sgr5          Set the SGR 5 color\n"
-		  "spmenu -sgr6          Set the SGR 6 color\n"
-		  "spmenu -sgr7          Set the SGR 7 color\n"
-		  "spmenu -sgr8          Set the SGR 8 color\n"
-		  "spmenu -sgr9          Set the SGR 9 color\n"
-		  "spmenu -sgr10         Set the SGR 10 color\n"
-		  "spmenu -sgr11         Set the SGR 11 color\n"
-		  "spmenu -sgr12         Set the SGR 12 color\n"
-          "spmenu -sgr13         Set the SGR 13 color\n"
-		  "spmenu -sgr14         Set the SGR 14 color\n"
-		  "spmenu -sgr15         Set the SGR 15 color\n"
-          "\n", stdout);
-          fputs("- dmenu compatibility -\n"
-	      "spmenu -nb <color>    Set the normal background color\n"
-		  "spmenu -nf <color>    Set the normal foreground color\n"
-		  "spmenu -sb <color>    Set the selected background color\n"
-		  "spmenu -sf <color>    Set the selected foreground color\n"
-          , stdout);
-	exit(1);
-}
-
 int
 main(int argc, char *argv[])
 {
 	XWindowAttributes wa;
-	int i, fast = 0;
 
-	XrmInitialize();
-
-	for (i = 1; i < argc; i++) {
-        /* xrdb first as it overrides other options */
-		if (!strcmp(argv[i], "-xrdb"))   /* xresources */
-			xresources = 1;
-		else if (!strcmp(argv[i], "-nxrdb"))   /* no xresources */
-			xresources = 0;
-    }
-
-    if (xresources) {
-        load_xresources();
-    }
-
-    if (casesensitive) {
-        fstrncmp = strncmp;
-        fstrstr = strstr;
-    }
-
-	/* these options take no arguments */
-	for (i = 1; i < argc; i++)
-        if (!strcmp(argv[i], "-v")) {      /* prints version information */
-			puts("spmenu-"VERSION);
-			exit(0);
-		} else if (!strcmp(argv[i], "-it")) { /* image: top */
-			imageposition = 0;
-		} else if (!strcmp(argv[i], "-ib")) { /* image: bottom */
-			imageposition = 1;
-		} else if (!strcmp(argv[i], "-ic")) { /* image: center */
-			imageposition = 2;
-		} else if (!strcmp(argv[i], "-itc")) { /* image: top center */
-			imageposition = 3;
-		} else if (!strcmp(argv[i], "-b")) { /* appears at the bottom of the screen */
-			menuposition = 0;
-		} else if (!strcmp(argv[i], "-t")) { /* appears at the top of the screen */
-			menuposition = 1;
-		} else if (!strcmp(argv[i], "-nm")) { /* normal mode */
-			mode = 0;
-		} else if (!strcmp(argv[i], "-im")) { /* insert mode */
-			mode = 1;
-        } else if (!strcmp(argv[i], "-c")) {  /* appears at the center of the screen */
-		    centered = 1;
-        } else if (!strcmp(argv[i], "-f")) {   /* grabs keyboard before reading stdin */
-			fast = 1;
-        } else if (!strcmp(argv[i], "-rw")) {  /* relative width */
-			accuratewidth = 1;
-        } else if (!strcmp(argv[i], "-nrw")) {   /* no relative width */
-			accuratewidth = 0;
-        } else if (!strcmp(argv[i], "-xrdb"))   /* xresources */
-			xresources = 1;
-		else if (!strcmp(argv[i], "-nxrdb"))   /* no xresources */
-			xresources = 0;
-		else if (!strcmp(argv[i], "-F"))   /* fuzzy matching */
-		     fuzzy = 0;
-		else if (!strcmp(argv[i], "-s")) { /* case-sensitive item matching */
-			fstrncmp = strncmp;
-			fstrstr = strstr;
-		} else if (!strcmp(argv[i], "-i")) { /* case-sensitive item matching, for compatibility reasons */
-		    fstrncmp = strncasecmp;
-		    fstrstr = cistrstr;
-        } else if (!strcmp(argv[i], "-gc")) { /* generate image cache */
-            generatecache = 1;
-		} else if (!strcmp(argv[i], "-wm")) { /* display as managed wm window */
-				managed = 1;
-		} else if (!strcmp(argv[i], "-na")) { /* disable alpha */
-				alpha = 0;
-		} else if (!strcmp(argv[i], "-a")) { /* alpha */
-				alpha = 1;
-        } else if (!strcmp(argv[i], "-cp")) { /* color prompt */
-                colorprompt = 1;
-        } else if (!strcmp(argv[i], "-ncp")) { /* no color prompt */
-                colorprompt = 0;
-        } else if (!strcmp(argv[i], "-tp")) { /*  allow the user to type */
-                type = 1;
-        } else if (!strcmp(argv[i], "-nt")) { /*  don't allow the user to type */
-                type = 0;
-		} else if (!strcmp(argv[i], "-P")) {  /* is the input a password */
-				passwd = 1;
-		} else if (!strcmp(argv[i], "-hmc")) {   /* hide match count */
-				hidematchcount = 1;
-		} else if (!strcmp(argv[i], "-smc")) {  /* don't hide match count */
-				hidematchcount = 0;
-		} else if (!strcmp(argv[i], "-hm")) {   /* hide mode indicator */
-				hidemode = 1;
-		} else if (!strcmp(argv[i], "-sm")) {  /* don't hide mode indicator */
-				hidemode = 0;
-        } else if (i + 1 == argc)
-			usage();
-
-		/* these options take one argument */
-		else if (!strcmp(argv[i], "-g")) {   /* number of columns in grid */
-			columns = atoi(argv[++i]);
-			if (lines == 0) lines = 1;
-		} else if (!strcmp(argv[i], "-l")) { /* number of lines in grid */
-			lines = atoi(argv[++i]);
-		} else if (!strcmp(argv[i], "-h")) { /* minimum height of one menu line */
-	        clineheight += atoi(argv[++i]);
-			if (columns == 0) columns = 1;
-		} else if (!strcmp(argv[i], "-lp")) {
-		    menupaddingv = atoi(argv[++i]);
-		} else if (!strcmp(argv[i], "-hp")) {
-		    menupaddingh = atoi(argv[++i]);
-		} else if (!strcmp(argv[i], "-ig")) {
-		    imagegaps = atoi(argv[++i]);
-		} else if (!strcmp(argv[i], "-la")) {
-		    leftarrow = argv[++i];
-		} else if (!strcmp(argv[i], "-ra")) {
-		    rightarrow = argv[++i];
-		} else if (!strcmp(argv[i], "-m")) /* monitor */
-			mon = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "-bw")) { /* border width */
-            bordercentered = 0;
-		    borderwidth = atoi(argv[++i]);
-        } else if (!strcmp(argv[i], "-H")) /* hist file location */
-			histfile = argv[++i];
-	    else if (!strcmp(argv[i], "-x"))   /* window x offset */
-			dmx = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "-y"))   /* window y offset (from bottom up if -b) */
-			dmy = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "-z"))   /* make spmenu this wide */
-			dmw = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "-p"))   /* adds prompt to left of input field */
-			prompt = argv[++i];
-		else if (!strcmp(argv[i], "-fn"))  /* font or font set */
-			strcpy(font, argv[++i]); /* font[0] = argv[++i]; */
-		else if (!strcmp(argv[i], "-nmt"))  /* normal mode text */
-			strcpy(normtext, argv[++i]);
-		else if (!strcmp(argv[i], "-imt")) {  /* insert mode text */
-			strcpy(instext, argv[++i]);
-
-        /* dmenu compatibility options */
-        } else if (!strcmp(argv[i], "-nb")) {  /* normal background color */
-			colors[SchemeItemNorm][ColBg] = argv[++i];
-            colors[SchemeMenu][ColBg] = argv[++i];
-            colors[SchemeInput][ColBg] = argv[++i];
-            colors[SchemePrompt][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-nf")) {  /* normal foreground color */
-			colors[SchemeItemNorm][ColFg] = argv[++i];
-            colors[SchemeMenu][ColFg] = argv[++i];
-            colors[SchemeInput][ColFg] = argv[++i];
-            colors[SchemePrompt][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-sb")) {  /* selected background color */
-			colors[SchemeItemSel][ColBg] = argv[++i];
-            colors[SchemeMenu][ColBg] = argv[++i];
-            colors[SchemeInput][ColBg] = argv[++i];
-            colors[SchemePrompt][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-sf")) {  /* selected foreground color */
-			colors[SchemeItemSel][ColFg] = argv[++i];
-            colors[SchemeMenu][ColFg] = argv[++i];
-            colors[SchemeInput][ColBg] = argv[++i];
-            colors[SchemePrompt][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-is")) { /* image size */
-            char buf[255];
-            memset(buf, 0, sizeof(buf));
-            memcpy(buf, argv[++i], sizeof(buf)-1);
-
-            if(sscanf(buf, "%dx%d", &imagewidth, &imageheight) == 1)
-                imageheight = imagewidth;
-
-        /* spmenu colors */
-        } else if (!strcmp(argv[i], "-nif")) { /* normal item foreground color */
-			colors[SchemeItemNorm][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-nib")) { /* normal item background color */
-			colors[SchemeItemNorm][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-sif")) { /* selected item foreground color */
-			colors[SchemeItemSel][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-sib")) { /* selected item background color */
-			colors[SchemeItemSel][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-mbg")) { /* menu color */
-			colors[SchemeMenu][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-pfg")) { /* prompt fg color */
-			colors[SchemePrompt][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-pbg")) { /* prompt bg color */
-			colors[SchemePrompt][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-ifg")) { /* input fg color */
-			colors[SchemeInput][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-pfg")) { /* input bg color */
-			colors[SchemeInput][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-shf")) { /* selected highlight foreground color */
-			colors[SchemeSelHighlight][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-shf")) { /* selected highlight foreground color */
-			colors[SchemeSelHighlight][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-nhf")) {  /* normal highlight foreground color */
-			colors[SchemeNormHighlight][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-shb")) { /* selected highlight foreground color */
-			colors[SchemeSelHighlight][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-nhb")) { /* normal highlight foreground color */
-			colors[SchemeNormHighlight][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-nbg")) { /* numbgcolor */
-			colors[SchemeNumber][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-nfg")) { /* numfgcolor */
-			colors[SchemeNumber][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-mbg")) { /* mode */
-			colors[SchemeMode][ColBg] = argv[++i];
-        } else if (!strcmp(argv[i], "-mfg")) { /* mode */
-			colors[SchemeMode][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-laf")) { /* left arrow fg */
-			colors[SchemeLArrow][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-raf")) { /* right arrow fg */
-			colors[SchemeRArrow][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-lab")) { /* left arrow bg */
-			colors[SchemeLArrow][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-rab")) { /* right arrow bg */
-			colors[SchemeRArrow][ColFg] = argv[++i];
-        } else if (!strcmp(argv[i], "-bc")) { /* border */
-			colors[SchemeBorder][ColBg] = argv[++i];
-        }
-
-        /* sgr colors */
-		else if (!strcmp(argv[i], "-sgr0")) textcolors[0] = argv[++i]; /* sgr color 0 */
-		else if (!strcmp(argv[i], "-sgr1")) textcolors[1] = argv[++i]; /* sgr color 1 */
-		else if (!strcmp(argv[i], "-sgr2")) textcolors[2] = argv[++i]; /* sgr color 2 */
-		else if (!strcmp(argv[i], "-sgr3")) textcolors[3] = argv[++i]; /* sgr color 3 */
-		else if (!strcmp(argv[i], "-sgr4")) textcolors[4] = argv[++i]; /* sgr color 4 */
-		else if (!strcmp(argv[i], "-sgr5")) textcolors[5] = argv[++i]; /* sgr color 5 */
-		else if (!strcmp(argv[i], "-sgr6")) textcolors[6] = argv[++i]; /* sgr color 6 */
-		else if (!strcmp(argv[i], "-sgr7")) textcolors[7] = argv[++i]; /* sgr color 7 */
-		else if (!strcmp(argv[i], "-sgr8")) textcolors[8] = argv[++i]; /* sgr color 8 */
-		else if (!strcmp(argv[i], "-sgr9")) textcolors[9] = argv[++i]; /* sgr color 9 */
-		else if (!strcmp(argv[i], "-sgr10")) textcolors[10] = argv[++i]; /* sgr color 10 */
-		else if (!strcmp(argv[i], "-sgr11")) textcolors[11] = argv[++i]; /* sgr color 11 */
-		else if (!strcmp(argv[i], "-sgr12")) textcolors[12] = argv[++i]; /* sgr color 12 */
-		else if (!strcmp(argv[i], "-sgr13")) textcolors[13] = argv[++i]; /* sgr color 13 */
-		else if (!strcmp(argv[i], "-sgr14")) textcolors[14] = argv[++i]; /* sgr color 14 */
-		else if (!strcmp(argv[i], "-sgr15")) textcolors[15] = argv[++i]; /* sgr color 15 */
-		else if (!strcmp(argv[i], "-cc"))  /* caret color */
-			colors[SchemeCaret][ColFg] = argv[++i];
-		else if (!strcmp(argv[i], "-w"))   /* embedding window id */
-			embed = argv[++i];
-    	else if (!strcmp(argv[i], "-n"))   /* preselected item */
-		    preselected = atoi(argv[++i]);
-		else
-			usage();
+    readargs(argc, argv);
 
     longestedge = MAX(imagewidth, imageheight);
 

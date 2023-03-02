@@ -1,4 +1,82 @@
 void
+cleanupimg(void)
+{
+    if (image) {
+        imlib_free_image();
+        image = NULL;
+    }
+
+    return;
+}
+
+void
+drawimage(void)
+{
+    #if !USEIMAGE
+    return;
+    #endif
+
+    int width = 0, height = 0;
+    char *limg = NULL;
+
+    if (!lines) return;
+    if (hideimage) return;
+
+    if (!imagewidth || !imageheight) {
+        imagewidth = imageheight = longestedge = imagegaps = 0;
+        return;
+    }
+
+    if (sel && sel->image && strcmp(sel->image, limg ? limg : "")) {
+        if (longestedge)
+            loadimagecache(sel->image, &width, &height);
+    } else if ((!sel || !sel->image) && image) {
+        imlib_free_image();
+        image = NULL;
+    } if (image && longestedge) {
+        int leftmargin = imagegaps;
+
+       	if(mh != bh + height + imagegaps * 2) {
+		    resizetoimageheight(height);
+	    }
+
+        if (!imageposition) { /* top mode = 0 */
+            if (height > width)
+                width = height;
+            imlib_render_image_on_drawable(leftmargin+(imagewidth-width)/2, bh+imagegaps);
+        } else if (imageposition == 1) { /* bottom mode = 1 */
+            if (height > width)
+                width = height;
+            imlib_render_image_on_drawable(leftmargin+(imagewidth-width)/2, mh-height-imagegaps);
+        } else if (imageposition == 2) { /* center mode = 2 */
+            imlib_render_image_on_drawable(leftmargin+(imagewidth-width)/2, (mh-bh-height)/2+bh);
+        } else {
+            int minh = MIN(height, mh-bh-imagegaps*2);
+            imlib_render_image_on_drawable(leftmargin+(imagewidth-width)/2, (minh-height)/2+bh+imagegaps);
+        }
+
+
+    } if (sel) {
+        limg = sel->image;
+    } else {
+        limg = NULL;
+    }
+}
+
+void
+setimageopts(void)
+{
+    imlib_set_cache_size(8192 * 1024);
+	imlib_context_set_blend(1);
+	imlib_context_set_dither(1);
+	imlib_set_color_usage(128);
+	imlib_context_set_display(dpy);
+	imlib_context_set_visual(visual);
+	imlib_context_set_colormap(cmap);
+	imlib_context_set_drawable(win);
+}
+
+void
 createifnexist(const char *dir)
 {
 	if(access(dir, F_OK) == 0)
