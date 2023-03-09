@@ -27,6 +27,8 @@ readargs(int argc, char *argv[])
         if (!strcmp(argv[i], "-v")) {      /* prints version information */
 			puts("spmenu-"VERSION);
 			exit(0);
+        } else if (!strcmp(argv[i], "-h")) { /* help */
+            usage();
 		} else if (!strcmp(argv[i], "-it")) { /* image: top */
 			imageposition = 0;
 		} else if (!strcmp(argv[i], "-ib")) { /* image: bottom */
@@ -60,11 +62,19 @@ readargs(int argc, char *argv[])
 		else if (!strcmp(argv[i], "-s")) { /* case-sensitive item matching */
 			fstrncmp = strncmp;
 			fstrstr = strstr;
+        } else if (!strcmp(argv[i], "-S")) { /* don't sort */
+            sortmatches = 0;
+        } else if (!strcmp(argv[i], "-nso")) { /* don't sort */
+            sortmatches = 0;
+        } else if (!strcmp(argv[i], "-so")) { /* don't sort */
+            sortmatches = 1;
 		} else if (!strcmp(argv[i], "-i")) { /* case-sensitive item matching, for compatibility reasons */
 		    fstrncmp = strncasecmp;
 		    fstrstr = cistrstr;
         } else if (!strcmp(argv[i], "-gc")) { /* generate image cache */
             generatecache = 1;
+        } else if (!strcmp(argv[i], "-ngc")) { /* don't generate image cache */
+            generatecache = 0;
 		} else if (!strcmp(argv[i], "-wm")) { /* display as managed wm window */
 				managed = 1;
 		} else if (!strcmp(argv[i], "-na")) { /* disable alpha */
@@ -114,7 +124,7 @@ readargs(int argc, char *argv[])
 		} else if (!strcmp(argv[i], "-si")) {  /* don't hide image */
 				hideimage = 0;
         } else if (i + 1 == argc)
-			usage();
+            fprintf(stderr, "spmenu: Invalid argument: '%s'\n", argv[i]);
 
 		/* these options take one argument */
 		else if (!strcmp(argv[i], "-g")) {   /* number of columns in grid */
@@ -131,6 +141,8 @@ readargs(int argc, char *argv[])
 		    menupaddingv = atoi(argv[++i]);
 		} else if (!strcmp(argv[i], "-hp")) {
 		    menupaddingh = atoi(argv[++i]);
+		} else if (!strcmp(argv[i], "-pri")) {
+            hpitems = tokenize(argv[++i], ",", &hplength);
 		} else if (!strcmp(argv[i], "-ig")) {
 		    imagegaps = atoi(argv[++i]);
 		} else if (!strcmp(argv[i], "-la")) {
@@ -153,7 +165,8 @@ readargs(int argc, char *argv[])
 		else if (!strcmp(argv[i], "-p"))   /* adds prompt to left of input field */
 			prompt = argv[++i];
 		else if (!strcmp(argv[i], "-fn"))  /* font or font set */
-			strcpy(font, argv[++i]); /* font[0] = argv[++i]; */
+			//strcpy(font[0], argv[++i]);
+            font[0] = argv[++i];
 		else if (!strcmp(argv[i], "-nmt"))  /* normal mode text */
 			strcpy(normtext, argv[++i]);
 		else if (!strcmp(argv[i], "-imt")) {  /* insert mode text */
@@ -197,6 +210,14 @@ readargs(int argc, char *argv[])
 			colors[SchemeItemSel][ColFg] = argv[++i];
         } else if (!strcmp(argv[i], "-sib")) { /* selected item background color */
 			colors[SchemeItemSel][ColBg] = argv[++i];
+        } else if (!strcmp(argv[i], "-npf")) { /* normal item priority foreground color */
+			colors[SchemeItemNormPri][ColFg] = argv[++i];
+        } else if (!strcmp(argv[i], "-npb")) { /* normal item priority background color */
+			colors[SchemeItemNormPri][ColBg] = argv[++i];
+        } else if (!strcmp(argv[i], "-spf")) { /* selected item priority foreground color */
+			colors[SchemeItemSelPri][ColFg] = argv[++i];
+        } else if (!strcmp(argv[i], "-spb")) { /* selected item priority background color */
+			colors[SchemeItemSelPri][ColBg] = argv[++i];
         } else if (!strcmp(argv[i], "-mbg")) { /* menu color */
 			colors[SchemeMenu][ColBg] = argv[++i];
         } else if (!strcmp(argv[i], "-pfg")) { /* prompt fg color */
@@ -261,7 +282,7 @@ readargs(int argc, char *argv[])
     	else if (!strcmp(argv[i], "-n"))   /* preselected item */
 		    preselected = atoi(argv[++i]);
 		else
-			usage();
+            fprintf(stderr, "spmenu: Invalid argument: '%s'\n", argv[i]);
 }
 
 void
@@ -273,6 +294,7 @@ usage(void)
 		  "spmenu -h <height>    Set spmenu line height to <height>\n"
 		  "spmenu -g <grid>      Set the number of grids to <grid>\n"
           "spmenu -gc            Generate image cache\n"
+          "spmenu -ngc           Don't generate image cache\n"
           "spmenu -rw            Enable relative input width\n"
           "spmenu -nrw           Disable relative input width\n"
           "spmenu -f             Grabs keyboard before reading stdin\n"
@@ -293,6 +315,9 @@ usage(void)
           "spmenu -nmt <text>    Set normal mode text to <text>\n"
           "spmenu -imt <text>    Set insert mode text to <text>\n"
 		  "spmenu -bw            Width of the border. 0 will disable the border\n"
+          "spmenu -so            Sort matches\n"
+          "spmenu -nso           Don't sort matches\n"
+          "spmenu -pri <pri>     Specify a list of items that take priority\n"
 		  "spmenu -s             Use case-sensitive matching\n"
 		  "spmenu -i             Use case-insensitive matching\n"
           "spmenu -nm            Start spmenu in normal mode\n"
@@ -340,6 +365,10 @@ usage(void)
           "spmenu -nib <color>   Set the normal item background color\n"
           "spmenu -sif <color>   Set the selected item foreground color\n"
           "spmenu -sib <color>   Set the selected item background color\n"
+          "spmenu -npf <color>   Set the normal item (high priority) foreground color\n"
+          "spmenu -npb <color>   Set the normal item (high priority) background color\n"
+          "spmenu -spf <color>   Set the selected item (high priority) foreground color\n"
+          "spmenu -spb <color>   Set the selected item (high priority) background color\n"
           "spmenu -pfg <color>   Set the prompt foreground color\n"
           "spmenu -pbg <color>   Set the prompt background color\n"
           "spmenu -ifg <color>   Set input foreground color\n"
@@ -378,6 +407,7 @@ usage(void)
 		  "spmenu -sgr15         Set the SGR 15 color\n"
           "\n", stdout);
           fputs("- dmenu compatibility -\n"
+          "spmenu -S             Don't sort matches\n"
 	      "spmenu -nb <color>    Set the normal background color\n"
 		  "spmenu -nf <color>    Set the normal foreground color\n"
 		  "spmenu -sb <color>    Set the selected background color\n"

@@ -7,6 +7,7 @@
 static char class[]                    = "spmenu"; /* Class for spmenu */
 static int fast                        = 0; /* Grab keyboard first */
 static int xresources                  = 1; /* Enable .Xresources support */
+static int mon                         = -1; /* Monitor to run spmenu on */
 
 /* Window options */
 static int alpha                       = 1; /* Enable alpha */
@@ -21,22 +22,21 @@ static int imagewidth                  = 86; /* Default image width */
 static int imageheight                 = 86; /* Default image height */
 static int imagegaps                   = 0; /* Image gaps */
 static int imageposition               = 0; /* Image position (0: Top, 1: Bottom, 2: Center, 3: Top center) */
-static int generatecache               = 0; /* Generate image cache by default */
+static int generatecache               = 1; /* Generate image cache by default */
 
 /* Mode options */
 static int mode                        = 0; /* Mode to start speedwm in (0: Normal mode, 1: Insert mode) */
 static char normtext[]                 = "Normal"; /* Text to display for normal mode */
 static char instext[]                  = "Insert"; /* Text to display for insert mode */
 
-/* Color support */
-static int colorsupport                = 1; /* Support 256 colors? Otherwise the default 16 colors will be used. */
-
 /* Window border options */
 static int borderwidth                 = 2; /* Width of the border */
 static int bordercentered              = 1; /* Draw border only when centered */
 
 /* Font options */
-static char font[]                     = "Noto Sans Mono 8"; /* Font to draw text and Pango markup with. */
+static char *font[]                    = {
+    "Noto Sans Mono 8", /* Font to draw text and Pango markup with. */
+};
 
 /* Symbol options */
 static char *leftarrow                 = "<"; /* Left arrow, used to indicate you can move to the left */
@@ -45,6 +45,7 @@ static char *password                  = "."; /* Password character, when the -P
 
 /* Match options */
 static int type                        = 1; /* Allow typing into spmenu or only allow keybinds. */
+static int sortmatches                 = 1; /* Sort matches (0/1) */
 static int casesensitive               = 0; /* Case-sensitive by default? (0/1) */
 static int preselected                 = 0; /* Which line should spmenu preselect? */
 static int accuratewidth               = 1; /* Enable accurate width. May have a performance hit if you are matching a lot of items at once */
@@ -80,6 +81,10 @@ static char col_itemnormfg[]           = "#bbbbbb"; /* Normal foreground item co
 static char col_itemnormbg[]           = "#222222"; /* Normal background item color */
 static char col_itemselfg[]            = "#eeeeee"; /* Selected foreground item color */
 static char col_itemselbg[]            = "#35638A"; /* Selected background item color */
+static char col_itemnormprifg[]        = "#bbbbbb"; /* Normal foreground item (high priority) color */
+static char col_itemnormpribg[]        = "#222222"; /* Normal background item (high priority) color */
+static char col_itemselprifg[]         = "#eeeeee"; /* Selected foreground item (high priority) color */
+static char col_itemselpribg[]         = "#35638A"; /* Selected background item (high priority) color */
 
 /* Input colors */
 static char col_inputbg[]              = "#222222"; /* Input field background color */
@@ -143,11 +148,11 @@ static int pango_item                  = 1; /* Enable support for pango markup f
 static int pango_highlight             = 1; /* Enable support for pango markup for the highlighting */
 static int pango_prompt                = 1; /* Enable support for pango markup for the prompt */
 static int pango_input                 = 1; /* Enable support for pango markup for user input */
-static int pango_leftarrow             = 1; /* Enable support for pango markup for the left arrow */
-static int pango_rightarrow            = 1; /* Enable support for pango markup for the right arrow */
-static int pango_numbers               = 1; /* Enable support for pango markup for the match count */
-static int pango_mode                  = 1; /* Enable support for pango markup for the mode indicator */
-static int pango_password              = 1; /* Enable support for pango markup for the password text */
+static int pango_leftarrow             = 0; /* Enable support for pango markup for the left arrow */
+static int pango_rightarrow            = 0; /* Enable support for pango markup for the right arrow */
+static int pango_numbers               = 0; /* Enable support for pango markup for the match count */
+static int pango_mode                  = 0; /* Enable support for pango markup for the mode indicator */
+static int pango_password              = 0; /* Enable support for pango markup for the password text */
 
 /* Alpha options */
 #define fgalpha                        opaque /* Foreground alpha */

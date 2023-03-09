@@ -14,7 +14,7 @@
 . ftr VB CB
 . ftr VBI CBI
 .\}
-.TH "spmenu" "1" "" "0.2.1" "dynamic menu"
+.TH "spmenu" "1" "" "0.2.2" "dynamic menu"
 .hy
 .SH spmenu
 .SS 1. What is spmenu?
@@ -27,6 +27,9 @@ alternative to spmenu.
 Unlike dmenu and the many builds out there, spmenu has features like
 color support, Vim-like modes, image support, proper keybind
 configuration, and more.
+.PP
+Most of these features can be disabled during compile time by editing
+\f[V]toggle.mk\f[R].
 .SS 2. Usage
 .PP
 On runtime, spmenu reads from standard input (stdin).
@@ -52,6 +55,8 @@ spmenu -h height - Set spmenu line height to height
 spmenu -g grid - Set the number of grids to grid
 .IP \[bu] 2
 spmenu -gc - Generate image cache
+.IP \[bu] 2
+spmenu -ngc - Don\[cq]t generate image cache
 .IP \[bu] 2
 spmenu -rw - Enable relative input width
 .IP \[bu] 2
@@ -93,6 +98,12 @@ spmenu -imt text - Set insert mode text to text
 .IP \[bu] 2
 spmenu -bw - Width of the border.
 0 will disable the border
+.IP \[bu] 2
+spmenu -so - Sort matches
+.IP \[bu] 2
+spmenu -nso - Don\[cq]t sort matches
+.IP \[bu] 2
+spmenu -pri priority - Specify a list of items that take priority
 .IP \[bu] 2
 spmenu -s - Use case-sensitive matching
 .IP \[bu] 2
@@ -166,8 +177,7 @@ spmenu -ic - Position the image in the center
 .IP \[bu] 2
 spmenu -itc - Position the image in the top center
 .IP \[bu] 2
-spmenu -wm - Spawn spmenu as a window manager controlled client/window.
-Useful for testing
+spmenu -wm - Spawn spmenu as a window manager controlled client
 .IP \[bu] 2
 spmenu -v - Print spmenu version to stdout
 .IP \[bu] 2
@@ -180,6 +190,16 @@ spmenu -nib color - Set the normal item background color
 spmenu -sif color - Set the selected item foreground color
 .IP \[bu] 2
 spmenu -sib color - Set the selected item background color
+.IP \[bu] 2
+spmenu -npf color - Set the normal item (high priority) foreground color
+.IP \[bu] 2
+spmenu -npb color - Set the normal item (high priority) background color
+.IP \[bu] 2
+spmenu -spf color - Set the selected item (high priority) foreground
+color
+.IP \[bu] 2
+spmenu -spb color - Set the selected item (high priority) background
+color
 .IP \[bu] 2
 spmenu -pfg color - Set the prompt foreground color
 .IP \[bu] 2
@@ -256,6 +276,8 @@ spmenu -sgr15 - Set the SGR 15 color
 There are also extra arguments recognized for dmenu compatibility.
 These are:
 .IP \[bu] 2
+spmenu -S - Don\[cq]t sort matches
+.IP \[bu] 2
 spmenu -nb color - Set the normal background color
 .IP \[bu] 2
 spmenu -nf color - Set the normal foreground color
@@ -307,12 +329,12 @@ the image will not be drawn.
 Any text after the Tab character will be interpreted as a regular item.
 In practice, drawing an image might look like this:
 .PP
-\f[V]printf \[dq]IMG:/path/to/image\[rs]tThis is text, look at that image, isn\[aq]t it awesome?\[rs]n\[dq] | spmenu\f[R]
+\f[V]printf \[dq]IMG:/path/to/image\[rs]tLook at that image, isn\[aq]t it awesome?\[rs]n\[dq] | spmenu\f[R]
 .PP
-There are also a few image related arguments, such as \f[V]-is\f[R],
-\f[V]-ig\f[R], \f[V]-it\f[R], \f[V]-ib\f[R], \f[V]-ic\f[R],
-\f[V]-itc\f[R] and \f[V]-gc\f[R].
-Be careful with the image size (-is) argument though.
+There are also a few image related arguments, such as:
+.PP
+\f[V]-is\f[R], \f[V]-ig\f[R], \f[V]-it\f[R], \f[V]-ib\f[R],
+\f[V]-ic\f[R], \f[V]-itc\f[R] and \f[V]-gc\f[R].
 .SS 8. Colored text
 .PP
 spmenu supports colored text through SGR sequences.

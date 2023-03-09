@@ -1,29 +1,81 @@
 void
-cleanupimg(void)
-{
-    if (image) {
-        imlib_free_image();
-        image = NULL;
-    }
-
-    return;
-}
-
-void
-drawimage(void)
+setimagesize(int width, int height)
 {
     #if !USEIMAGE
     return;
     #endif
 
+    int oih = 0;
+    int oiw = 0;
+
+    /* this makes sure we cannot scale the image up or down too much */
+    if ((!image && height < imageheight) || (!image && width < imagewidth) || width > mw || hideimage) return;
+
+    oih = imageheight;
+    oiw = imagewidth;
+
+    imageheight = height;
+    imagewidth = width;
+
+    drawimage();
+
+    needredraw = 0;
+
+    if (!image) {
+        imageheight = oih;
+        imagewidth = oiw;
+        return;
+    }
+
+    drawmenu();
+}
+
+void
+flipimage(void)
+{
+    switch (flip) {
+        case 1: /* horizontal */
+            imlib_image_flip_horizontal();
+            break;
+        case 2: /* vertical */
+            imlib_image_flip_vertical();
+            break;
+        case 3: /* diagonal */
+            imlib_image_flip_diagonal();
+            break;
+        default:
+            flip = flip ? 1 : 0;
+            return;
+    }
+}
+
+void
+rotateimage(void)
+{
+    rotation %= 4;
+    imlib_image_orientate(rotation);
+}
+
+void
+cleanupimage(void)
+{
+    if (image) {
+        imlib_free_image();
+        image = NULL;
+    }
+}
+
+void
+drawimage(void)
+{
     int width = 0, height = 0;
     char *limg = NULL;
 
-    if (!lines) return;
-    if (hideimage) return;
+    if (!lines || hideimage) return;
 
-    if (!imagewidth || !imageheight) {
-        imagewidth = imageheight = longestedge = imagegaps = 0;
+    /* to prevent the image from being drawn multiple times */
+    if (!needredraw) {
+        needredraw = 1;
         return;
     }
 
@@ -34,6 +86,10 @@ drawimage(void)
         imlib_free_image();
         image = NULL;
     } if (image && longestedge) {
+
+        rotateimage();
+        flipimage();
+
         int leftmargin = imagegaps;
 
        	if(mh != bh + height + imagegaps * 2) {
@@ -160,7 +216,7 @@ loadimagecache(const char *file, int *width, int *height)
 	int slen = 0, i;
 	unsigned char digest[MD5_DIGEST_LENGTH];
 	char md5[MD5_DIGEST_LENGTH*2+1];
-	char *xdg_cache, *home = NULL, *dsize, *buf;
+	char *xdg_cache, *home = NULL, *dsize, *buf = NULL;
 	struct passwd *pw = NULL;
 
 	/* just load and don't store or try cache */
@@ -171,80 +227,83 @@ loadimagecache(const char *file, int *width, int *height)
 		return;
 	}
 
-	/* try find image from cache first */
-	if(!(xdg_cache = getenv("XDG_CACHE_HOME"))) {
-		if(!(home = getenv("HOME")) && (pw = getpwuid(getuid())))
-			home = pw->pw_dir;
-		if(!home) {
-			fprintf(stderr, "spmenu: could not find home directory");
-			return;
-		}
-	}
+    if (generatecache) {
+        /* try find image from cache first */
+        if(!(xdg_cache = getenv("XDG_CACHE_HOME"))) {
+            if(!(home = getenv("HOME")) && (pw = getpwuid(getuid())))
+                home = pw->pw_dir;
+            if(!home) {
+                fprintf(stderr, "spmenu: could not find home directory");
+                return;
+            }
+        }
 
-	/* which cache do we try? */
-	dsize = "normal";
-	if (longestedge > 128)
-        dsize = "large";
+        /* which cache do we try? */
+        dsize = "normal";
+        if (longestedge > 128)
+            dsize = "large";
 
-	slen = snprintf(NULL, 0, "file://%s", file)+1;
+        slen = snprintf(NULL, 0, "file://%s", file)+1;
 
-	if(!(buf = malloc(slen))) {
-		fprintf(stderr, "spmenu: out of memory");
-		return;
-	}
+        if(!(buf = malloc(slen))) {
+            fprintf(stderr, "spmenu: out of memory");
+            return;
+        }
 
-	/* calculate md5 from path */
-	sprintf(buf, "file://%s", file);
-	MD5((unsigned char*)buf, slen, digest);
+        /* calculate md5 from path */
+        sprintf(buf, "file://%s", file);
+        MD5((unsigned char*)buf, slen, digest);
 
-	free(buf);
+        free(buf);
 
-	for(i = 0; i < MD5_DIGEST_LENGTH; ++i)
-        sprintf(&md5[i*2], "%02x", (unsigned int)digest[i]);
+        for(i = 0; i < MD5_DIGEST_LENGTH; ++i)
+            sprintf(&md5[i*2], "%02x", (unsigned int)digest[i]);
 
-	/* path for cached thumbnail */
-	if (xdg_cache)
-        slen = snprintf(NULL, 0, "%s/thumbnails/%s/%s.png", xdg_cache, dsize, md5)+1;
-	else
-        slen = snprintf(NULL, 0, "%s/.thumbnails/%s/%s.png", home, dsize, md5)+1;
+        /* path for cached thumbnail */
+        if (xdg_cache)
+            slen = snprintf(NULL, 0, "%s/thumbnails/%s/%s.png", xdg_cache, dsize, md5)+1;
+        else
+            slen = snprintf(NULL, 0, "%s/.thumbnails/%s/%s.png", home, dsize, md5)+1;
 
-	if(!(buf = malloc(slen))) {
-		fprintf(stderr, "out of memory");
-		return;
-	}
+        if(!(buf = malloc(slen))) {
+            fprintf(stderr, "out of memory");
+            return;
+        }
 
-	if (xdg_cache)
-        sprintf(buf, "%s/thumbnails/%s/%s.png", xdg_cache, dsize, md5);
-	else
-        sprintf(buf, "%s/.thumbnails/%s/%s.png", home, dsize, md5);
+        if (xdg_cache)
+            sprintf(buf, "%s/thumbnails/%s/%s.png", xdg_cache, dsize, md5);
+        else
+            sprintf(buf, "%s/.thumbnails/%s/%s.png", home, dsize, md5);
 
-	loadimage(buf, width, height);
+        loadimage(buf, width, height);
 
-	if (image && *width < imagewidth && *height < imageheight) {
-		imlib_free_image();
-		image = NULL;
-	} else if(image && (*width > imagewidth || *height > imageheight)) {
-		scaleimage(width, height);
-	}
+        if (image && *width < imagewidth && *height < imageheight) {
+            imlib_free_image();
+            image = NULL;
+        } else if(image && (*width > imagewidth || *height > imageheight)) {
+            scaleimage(width, height);
+        }
 
-	/* we are done */
-    if (image) {
-		free(buf);
-		return;
-	}
+        /* we are done */
+        if (image) {
+            free(buf);
+            return;
+        }
+    }
 
     /* we din't find anything from cache, or it was just wrong */
 	loadimage(file, width, height);
-	if (!image) {
-		free(buf);
-		return;
-	}
-
 	scaleimage(width, height);
+
+    if (!generatecache) return;
+
 	imlib_image_set_format("png");
-	createifnexist_rec(buf);
-	imlib_save_image(buf);
-	free(buf);
+
+    if (buf && generatecache) {
+        createifnexist_rec(buf);
+        imlib_save_image(buf);
+        free(buf);
+    }
 }
 
 void
@@ -252,7 +311,7 @@ jumptoindex(unsigned int index) {
 	unsigned int i;
 	sel = curr = matches;
 	calcoffsets();
-	for(i = 1; i < index; ++i) {
+	for (i = 1; i < index; ++i) {
 		if(sel && sel->right && (sel = sel->right) == next) {
 			curr = next;
 			calcoffsets();
@@ -266,15 +325,15 @@ resizetoimageheight(int imageheight)
 	int omh = mh, olines = lines;
 	lines = reallines;
 
-	if(lines * bh < imageheight + imagegaps * 2)
-        lines = (imageheight+imagegaps*2)/bh;
+	if (lines * bh < imageheight + imagegaps * 2)
+        lines = (imageheight + imagegaps * 2) / bh;
 
 	mh = (lines + 1) * bh;
 
-	if(mh - bh < imageheight + imagegaps * 2)
-        mh = imageheight+imagegaps*2+bh;
+	if (mh - bh < imageheight + imagegaps * 2)
+        mh = imageheight + imagegaps * 2 + bh;
 
-	if(!win || omh == mh)
+	if (!win || omh == mh)
         return;
 
 	XResizeWindow(dpy, win, mw, mh);
@@ -283,6 +342,7 @@ resizetoimageheight(int imageheight)
 	if (olines != lines) {
        	struct item *item;
 		unsigned int i = 1;
+
 		for (item = matches; item && item != sel; item = item->right)
             ++i;
 

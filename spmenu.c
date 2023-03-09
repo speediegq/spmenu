@@ -1,4 +1,16 @@
-/* See LICENSE file for copyright and license details. */
+/* spmenu - speedie's dmenu fork
+ *
+ * If you're looking for functions used to draw text, see 'libs/draw.c'
+ * If you're looking for wrapper functions used inside the draw functions, see 'libs/sl/draw.c'
+ * If you're looking for functions used to draw images, see 'libs/img.c'
+ * If you're looking for the .Xresources array, see 'libs/xresources.h'
+ *
+ * You don't need to edit spmenu.c if you aren't making big changes to the software.
+ *
+ * After making changes, run 'make clean install' to install and 'make' to attempt a compilation.
+ * `make man` will generate a man page from 'docs/docs.md', which is a Markdown document. Run this before commiting.
+ *
+ * See LICENSE file for copyright and license details. */
 #include <ctype.h>
 #include <locale.h>
 #include <math.h>
@@ -10,14 +22,21 @@
 #include <unistd.h>
 
 /* check if we should enable right to left language support */
-#ifdef NORTL
+#ifndef RTL
 #define USERTL 0
 #else
 #define USERTL 1
 #endif
 
+/* check if we should enable pango support */
+#ifndef PANGO
+#define USEPANGO 0
+#else
+#define USEPANGO 1
+#endif
+
 /* check if we should enable image support */
-#ifdef NOIMAGE
+#ifndef IMAGE
 #define USEIMAGE 0
 #else
 #define USEIMAGE 1
@@ -29,7 +48,6 @@
 #else
 #define USEXINERAMA 0
 #endif
-
 
 /* include right to left language library */
 #if USERTL
@@ -55,10 +73,13 @@
 #include <X11/Xutil.h>
 #include <X11/Xresource.h>
 #include <X11/Xft/Xft.h>
-#include <pango/pango.h>
 
-#include "draw.h"
-#include "main.h"
+#if USEPANGO
+#include <pango/pango.h>
+#endif
+
+#include "libs/sl/draw.h"
+#include "libs/sl/main.h"
 
 /* macros */
 #define CLEANMASK(mask)         (mask & ~(numlockmask|LockMask) & (ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask))
@@ -84,9 +105,14 @@
 /* alpha */
 #define opaque 0xffU
 
-/* include enums */
+/* include headers */
 #include "libs/schemes.h"
 #include "libs/arg.h"
+#include "libs/mode.h"
+#include "libs/xrdb.h"
+#include "libs/key.h"
+#include "libs/mouse.h"
+#include "libs/sort.h"
 
 static char text[BUFSIZ] = "";
 
@@ -95,10 +121,12 @@ struct item {
     char *image;
     char *ex;
 	struct item *left, *right;
+    int hp;
 	double distance;
 };
 
 typedef struct {
+    unsigned int mode;
 	unsigned int mod;
 	KeySym keysym;
 	void (*func)(const Arg *);
@@ -106,6 +134,8 @@ typedef struct {
 } Key;
 
 static char numbers[NUMBERSBUFSIZE] = "";
+static int hplength = 0;
+static char **hpitems = NULL;
 static char *embed;
 static int numlockmask = 0;
 static int bh, mw, mh;
@@ -120,21 +150,32 @@ static int lrpad; /* sum of left and right padding */
 static int vp;    /* vertical padding for bar */
 static int sp;    /* side padding for bar */
 static size_t cursor;
-static unsigned int selected = 0;
 static struct item *items = NULL, *backup_items;
 static struct item *matches, *matchend;
 static struct item *prev, *curr, *next, *sel;
-static int mon = -1, screen;
+static int screen;
 static int managed = 0;
 
+/* image globals */
+#if USEIMAGE
+static int flip = 0;
+static int rotation = 0;
+static int needredraw = 1;
+#endif
+static int longestedge = 0;
+static int imagew = 0;
+static int imageh = 0;
+static int imageg = 0;
+
+/* set an integer if to 1 if we have right to left language support enabled
+ * doing it this way, because we can reduce the amount of #if and #else lines used.
+ */
 #if USERTL
 static int isrtl = 1;
 #else
 static int isrtl = 0;
 static char fribidi_text[] = "";
 #endif
-
-#include "libs/mode.h"
 
 static Atom clip, utf8, types, dock;
 static Display *dpy;
@@ -153,101 +194,58 @@ static Clr textclrs[256];
 static char *histfile;
 static char **history;
 static size_t histsz, histpos;
-
-/* keybind functions */
-static void move(const Arg *arg);
-static void moveend(const Arg *arg);
-static void movestart(const Arg *arg);
-static void movenext(const Arg *arg);
-static void moveprev(const Arg *arg);
-static void paste(const Arg *arg);
-static void restoresel(const Arg *arg);
-static void clear(const Arg *arg);
-static void viewhist(const Arg *arg);
-static void moveword(const Arg *arg);
-static void navhistory(const Arg *arg);
-static void backspace(const Arg *arg);
-static void selectitem(const Arg *arg);
-static void quit(const Arg *arg);
-static void complete(const Arg *arg);
-static void savehistory(char *input);
-static void setimgsize(const Arg *arg);
-static void toggleimg(const Arg *arg);
+static size_t nextrune(int inc);
 
 static void drawmenu(void);
 static void calcoffsets(void);
-static void run(void);
 static void readstdin(void);
 static void recalculatenumbers(void);
 static void usage(void);
-
-#include "libs/xrdb.h"
+static void match(void);
+static void movewordedge(int dir);
+static void insert(const char *str, ssize_t n);
+static void cleanup(void);
+static void navigatehistfile(int dir);
+static void grabfocus(void);
+static void pastesel(void);
+static int max_textw(void);
 
 /* user configuration */
 #include "options.h" /* Include main header */
 #include "keybinds.h" /* Include keybinds */
-#include "colors.h" /* Include colors */
-#include "xresources.h" /* Include .Xresources */
+
+#include "libs/xresources.h"
+#include "libs/colors.h"
 
 static char * cistrstr(const char *s, const char *sub);
 static int (*fstrncmp)(const char *, const char *, size_t) = strncasecmp;
 static char *(*fstrstr)(const char *, const char *) = cistrstr;
 
-#include "libs/xrdb.c"
-#include "libs/mode.c"
-#include "libs/client.h"
-#include "libs/client.c"
-
 #if USEIMAGE
-static int longestedge = 0; /* longest edge */
-
 #include "libs/img.h"
 #include "libs/img.c"
 #endif
 #if USERTL
 #include "libs/rtl.h"
 #include "libs/rtl.c"
+#else
+#include "libs/rtl-none.h"
+#include "libs/rtl-none.c"
 #endif
+#include "libs/event.h"
+#include "libs/event.c"
+#include "libs/key.c"
+#include "libs/mouse.c"
+#include "libs/sort.c"
 #include "libs/draw.c"
 #include "libs/schemes.c"
+#include "libs/arg.c"
 #include "libs/argv.h"
 #include "libs/argv.c"
-
-void
-setimgsize(const Arg *arg)
-{
-    #if !USEIMAGE
-    return;
-    #endif
-
-    cleanupimg();
-
-    imageheight += arg->i;
-    imagewidth += arg->i;
-
-    if (!imageheight || !imagewidth || !longestedge) {
-        imageheight = imagewidth = longestedge = 1;
-        return;
-    }
-
-    drawmenu();
-    drawimage();
-}
-
-void
-toggleimg(const Arg *arg)
-{
-    #if !USEIMAGE
-    return;
-    #endif
-
-    cleanupimg();
-
-    hideimage = !hideimage;
-
-    drawmenu();
-    drawimage();
-}
+#include "libs/xrdb.c"
+#include "libs/mode.c"
+#include "libs/client.h"
+#include "libs/client.c"
 
 void
 appenditem(struct item *item, struct item **list, struct item **last)
@@ -321,12 +319,17 @@ cleanup(void)
 	size_t i;
 
     #if USEIMAGE
-    cleanupimg();
+    cleanupimage();
     #endif
 
 	XUngrabKey(dpy, AnyKey, AnyModifier, root);
+
 	for (i = 0; i < SchemeLast; i++)
 		free(scheme[i]);
+
+    for (i = 0; i < hplength; ++i)
+		free(hpitems[i]);
+
 	drw_free(drw);
 	XSync(dpy, False);
 	XCloseDisplay(dpy);
@@ -415,6 +418,8 @@ fuzzymatch(void)
 	/* bang - we have so much memory */
 	struct item *it;
 	struct item **fuzzymatches = NULL;
+    struct item *lhpprefix, *hpprefixend;
+	lhpprefix = hpprefixend = NULL;
 	char c;
 	int number_of_matches = 0, i, pidx, sidx, eidx;
 	int text_len = strlen(text), itext_len;
@@ -463,14 +468,24 @@ fuzzymatch(void)
 			fuzzymatches[i] = it;
 		}
 		/* sort matches according to distance */
-		qsort(fuzzymatches, number_of_matches, sizeof(struct item*), compare_distance);
+        if (sortmatches) qsort(fuzzymatches, number_of_matches, sizeof(struct item*), compare_distance);
+
 		/* rebuild list of matches */
 		matches = matchend = NULL;
 		for (i = 0, it = fuzzymatches[i];  i < number_of_matches && it && \
 				it->text; i++, it = fuzzymatches[i]) {
-			appenditem(it, &matches, &matchend);
+
+            if (sortmatches && it->hp)
+                appenditem(it, &lhpprefix, &hpprefixend);
+
+            appenditem(it, &matches, &matchend);
 		}
 		free(fuzzymatches);
+	}
+
+    if (lhpprefix) {
+		hpprefixend->right = matches;
+		matches = lhpprefix;
 	}
 
 	curr = sel = matches;
@@ -498,7 +513,8 @@ match(void)
 	char buf[sizeof text], *s;
 	int i, tokc = 0;
 	size_t len, textsize;
-	struct item *item, *lprefix, *lsubstr, *prefixend, *substrend;
+    struct item *item, *lhpprefix, *lprefix, *lsubstr, *hpprefixend, *prefixend, *substrend;
+
 
 	strcpy(buf, text);
 	/* separate input text into tokens to be matched individually */
@@ -507,7 +523,7 @@ match(void)
 			die("cannot realloc %u bytes:", tokn * sizeof *tokv);
 	len = tokc ? strlen(tokv[0]) : 0;
 
-	matches = lprefix = lsubstr = matchend = prefixend = substrend = NULL;
+    matches = lhpprefix = lprefix = lsubstr = matchend = hpprefixend = prefixend = substrend = NULL;
 	textsize = strlen(text) + 1;
 	for (item = items; item && item->text; item++) {
 		for (i = 0; i < tokc; i++)
@@ -515,13 +531,27 @@ match(void)
 				break;
 		if (i != tokc) /* not all tokens match */
 			continue;
-		/* exact matches go first, then prefixes, then substrings */
-		if (!tokc || !fstrncmp(text, item->text, textsize))
+        if (!sortmatches)
 			appenditem(item, &matches, &matchend);
-		else if (!fstrncmp(tokv[0], item->text, len))
-			appenditem(item, &lprefix, &prefixend);
-		else
-			appenditem(item, &lsubstr, &substrend);
+        else {
+            /* exact matches go first, then prefixes with high priority, then prefixes, then substrings */
+            if (item->hp && !fstrncmp(tokv[0], item->text, len))
+			    appenditem(item, &lhpprefix, &hpprefixend);
+            else if (!tokc || !fstrncmp(text, item->text, textsize))
+				appenditem(item, &matches, &matchend);
+			else if (!fstrncmp(tokv[0], item->text, len))
+				appenditem(item, &lprefix, &prefixend);
+			else
+				appenditem(item, &lsubstr, &substrend);
+		}
+	}
+    if (lhpprefix) {
+		if (matches) {
+			matchend->right = lhpprefix;
+			lhpprefix->left = matchend;
+		} else
+			matches = lhpprefix;
+		matchend = hpprefixend;
 	}
 	if (lprefix) {
 		if (matches) {
@@ -643,507 +673,31 @@ navigatehistfile(int dir)
 		strncpy(def, text, sizeof(def));
 	}
 
-	switch(dir) {
-	case 1:
-		if (histpos < histsz - 1) {
-			p = history[++histpos];
-		} else if (histpos == histsz - 1) {
-			p = def;
-			histpos++;
-		}
-		break;
-	case -1:
-		if (histpos > 0) {
-			p = history[--histpos];
-		}
-		break;
+	switch (dir) {
+        case 1:
+            if (histpos < histsz - 1) {
+                p = history[++histpos];
+            } else if (histpos == histsz - 1) {
+                p = def;
+                histpos++;
+            }
+            break;
+        case -1:
+            if (histpos > 0) {
+                p = history[--histpos];
+            }
+            break;
 	}
+
 	if (p == NULL) {
 		return;
 	}
 
 	len = MIN(strlen(p), BUFSIZ - 1);
-	strncpy(text, p, len);
+	strcpy(text, p);
 	text[len] = '\0';
 	cursor = len;
 	match();
-}
-
-void
-paste(const Arg *arg)
-{
-    int clipboard;
-
-    if (arg->i == 1) {
-        clipboard = XA_PRIMARY;
-    } else {
-        clipboard = clip;
-    }
-
-	XConvertSelection(dpy, clipboard, utf8, utf8, win, CurrentTime);
-	return;
-
-}
-
-void
-quit(const Arg *arg)
-{
-	cleanup();
-	exit(1);
-}
-
-void
-viewhist(const Arg *arg)
-{
-    int i;
-
-    if (histfile) {
-		if (!backup_items) {
-			backup_items = items;
-			items = calloc(histsz + 1, sizeof(struct item));
-
-			if (!items) {
-				die("spmenu: cannot allocate memory");
-			}
-
-			for (i = 0; i < histsz; i++) {
-				items[i].text = history[i];
-			}
-		} else {
-			free(items);
-			items = backup_items;
-			backup_items = NULL;
-		}
-	}
-
-	match();
-    drawmenu();
-}
-
-void
-moveword(const Arg *arg)
-{
-    movewordedge(arg->i);
-    drawmenu();
-}
-
-void
-backspace(const Arg *arg)
-{
-    if (cursor == 0)
-        return;
-
-    insert(NULL, nextrune(-1) - cursor);
-    drawmenu();
-}
-
-void
-selectitem(const Arg *arg)
-{
-    char *selection;
-
-    if (sel) {
-        selection = sel->text;
-    } else {
-        selection = text;
-    }
-
-    if (!selection)
-        return;
-
-    puts(selection);
-    savehistory(selection);
-
-	cleanup();
-	exit(0);
-}
-
-void
-movenext(const Arg *arg)
-{
-	if (!next)
-		return;
-
-	sel = curr = next;
-	calcoffsets();
-    drawmenu();
-}
-
-void
-moveprev(const Arg *arg)
-{
-    if (!prev)
-        return;
-
-    sel = curr = prev;
-    calcoffsets();
-    drawmenu();
-}
-
-void
-movestart(const Arg *arg)
-{
-  	if (sel == matches) {
-		cursor = 0;
-        drawmenu();
-        return;
-	}
-
-	sel = curr = matches;
-	calcoffsets();
-    drawmenu();
-}
-
-void
-moveend(const Arg *arg)
-{
-    if (text[cursor] != '\0') {
-		cursor = strlen(text);
-        drawmenu();
-        return;
-	}
-
-	if (next) {
-		curr = matchend;
-		calcoffsets();
-		curr = prev;
-		calcoffsets();
-
-		while (next && (curr = curr->right))
-			calcoffsets();
-	}
-
-	sel = matchend;
-    drawmenu();
-}
-
-void
-navhistory(const Arg *arg)
-{
-    navigatehistfile(arg->i);
-    drawmenu();
-}
-
-void
-restoresel(const Arg *arg)
-{
-    text[cursor] = '\0';
-    match();
-    drawmenu();
-}
-
-void
-clear(const Arg *arg)
-{
-    insert(NULL, 0 - cursor);
-    drawmenu();
-}
-
-void
-complete(const Arg *arg)
-{
- 	if (!sel)
-		return;
-
-	strncpy(text, sel->text, sizeof text - 1);
-	text[sizeof text - 1] = '\0';
-	cursor = strlen(text);
-	match();
-    drawmenu();
-}
-
-void
-move(const Arg *arg)
-{
-    struct item *tmpsel;
-    int i, offscreen = 0;
-
-    if (arg->i == 3) { /* left */
-    	if (columns > 1) {
-			if (!sel)
-				return;
-			tmpsel = sel;
-			for (i = 0; i < lines; i++) {
-				if (!tmpsel->left || tmpsel->left->right != tmpsel) {
-					if (offscreen)
-						drawmenu();
-					return;
-				}
-				if (tmpsel == curr)
-					offscreen = 1;
-				tmpsel = tmpsel->left;
-			}
-			sel = tmpsel;
-			if (offscreen) {
-				curr = prev;
-				calcoffsets();
-			}
-			drawmenu();
-		}
-
-		if (cursor > 0 && (!sel || !sel->left || lines > 0)) {
-			cursor = nextrune(-1);
-			drawmenu();
-		}
-		if (lines > 0)
-			return;
-    } else if (arg->i == 4) {
-        	if (columns > 1) {
-			if (!sel)
-				return;
-			tmpsel = sel;
-			for (i = 0; i < lines; i++) {
-				if (!tmpsel->right ||  tmpsel->right->left != tmpsel) {
-					if (offscreen)
-						drawmenu();
-					return;
-				}
-				tmpsel = tmpsel->right;
-				if (tmpsel == next)
-					offscreen = 1;
-			}
-			sel = tmpsel;
-			if (offscreen) {
-				curr = next;
-				calcoffsets();
-			}
-			drawmenu();
-		}
-
-		if (text[cursor] != '\0') {
-			cursor = nextrune(+1);
-			drawmenu();
-		}
-
-		if (lines > 0)
-			return;
-    } else if (arg->i == 2) {
-       	if (sel && sel->right && (sel = sel->right) == next) {
-			curr = next;
-			calcoffsets();
-		}
-		drawmenu();
-    } else if (arg->i == 1) {
-        if (sel && sel->left && (sel = sel->left)->right == curr) {
-			curr = prev;
-			calcoffsets();
-		}
-        drawmenu();
-    }
-}
-
-void
-updatenumlockmask(void)
-{
-	unsigned int i, j;
-	XModifierKeymap *modmap;
-
-	numlockmask = 0;
-	modmap = XGetModifierMapping(dpy);
-	for (i = 0; i < 8; i++)
-		for (j = 0; j < modmap->max_keypermod; j++)
-			if (modmap->modifiermap[i * modmap->max_keypermod + j]
-				== XKeysymToKeycode(dpy, XK_Num_Lock))
-				numlockmask = (1 << i);
-	XFreeModifiermap(modmap);
-}
-
-void
-keypress(XEvent *e)
-{
-   	updatenumlockmask();
-    {
-        unsigned int i;
-        KeySym keysym;
-        XKeyEvent *ev;
-        char buf[64];
-        char keyArray;
-        KeySym ksym = NoSymbol;
-        Status status;
-
-        int len = 0;
-        ev = &e->xkey;
-        len = XmbLookupString(xic, ev, buf, sizeof buf, &ksym, &status);
-
-        keysym = XkbKeycodeToKeysym(dpy, (KeyCode)ev->keycode, 0, 0);
-
-        if (selkeys) {
-            for (i = 0; i < LENGTH(inskeys); i++) {
-                if (keysym == inskeys[i].keysym && CLEANMASK(inskeys[i].mod) == CLEANMASK(ev->state) && inskeys[i].func)
-                    inskeys[i].func(&(inskeys[i].arg));
-            }
-        } else {
-            for (i = 0; i < LENGTH(normkeys); i++) {
-                if (keysym == normkeys[i].keysym && CLEANMASK(normkeys[i].mod) == CLEANMASK(ev->state) && normkeys[i].func)
-                    normkeys[i].func(&(normkeys[i].arg));
-            }
-        }
-
-        if (!iscntrl(*buf) && type && selkeys ) {
-
-            if (allowkeys) {
-                insert(buf, len);
-            } else {
-                allowkeys = !allowkeys;
-            }
-
-            drawmenu();
-        }
-    }
-}
-
-void
-savehistory(char *input)
-{
-	unsigned int i;
-	FILE *fp;
-
-	if (!histfile ||
-	    0 == maxhist ||
-	    0 == strlen(input)) {
-		goto out;
-	}
-
-	fp = fopen(histfile, "w");
-	if (!fp) {
-		die("failed to open %s", histfile);
-	}
-	for (i = histsz < maxhist ? 0 : histsz - maxhist; i < histsz; i++) {
-		if (0 >= fprintf(fp, "%s\n", history[i])) {
-			die("failed to write to %s", histfile);
-		}
-	}
-	if (histsz == 0 || !histnodup || (histsz > 0 && strcmp(input, history[histsz-1]) != 0)) { /* TODO */
-		if (0 >= fputs(input, fp)) {
-			die("failed to write to %s", histfile);
-		}
-	}
-	if (fclose(fp)) {
-		die("failed to close file %s", histfile);
-	}
-
-out:
-	for (i = 0; i < histsz; i++) {
-		free(history[i]);
-	}
-	free(history);
-}
-
-void
-buttonpress(XEvent *e)
-{
-	struct item *item;
-	XButtonPressedEvent *ev = &e->xbutton;
-	int x = 0, y = 0, h = bh, w, item_num = 0;
-
-	if (ev->window != win)
-		return;
-
-	/* right-click: exit */
-	if (ev->button == Button3)
-		exit(1);
-
-	if (prompt && *prompt)
-		x += promptw;
-
-	/* input field */
-	w = (lines > 0 || !matches) ? mw - x : inputw;
-
-	/* left-click on input: clear input,
-	 * NOTE: if there is no left-arrow the space for < is reserved so
-	 *       add that to the input width */
-	if (ev->button == Button1 &&
-	   ((lines <= 0 && ev->x >= 0 && ev->x <= x + w +
-	   ((!prev || !curr->left) ? TEXTW(leftarrow) : 0)) ||
-	   (lines > 0 && ev->y >= y && ev->y <= y + h))) {
-		insert(NULL, -cursor);
-		drawmenu();
-		return;
-	}
-	/* middle-mouse click: paste selection */
-	if (ev->button == Button2) {
-		XConvertSelection(dpy, (ev->state & ShiftMask) ? clip : XA_PRIMARY,
-		                  utf8, utf8, win, CurrentTime);
-		drawmenu();
-		return;
-	}
-	/* scroll up */
-	if (ev->button == Button4 && prev) {
-		sel = curr = prev;
-		calcoffsets();
-		drawmenu();
-		return;
-	}
-	/* scroll down */
-	if (ev->button == Button5 && next) {
-		sel = curr = next;
-		calcoffsets();
-		drawmenu();
-		return;
-	}
-	if (ev->button != Button1)
-		return;
-	if (ev->state & ~ControlMask)
-		return;
-	if (lines > 0) {
-		/* vertical list: (ctrl)left-click on item */
-		w = mw - x;
-		for (item = curr; item != next; item = item->right) {
-			if (item_num++ == lines){
-				item_num = 1;
-				x += w / columns;
-				y = 0;
-			}
-			y += h;
-			if (ev->y >= y && ev->y <= (y + h) &&
-			    ev->x >= x && ev->x <= (x + w / columns)) {
-				puts(item->text);
-				if (!(ev->state & ControlMask))
-					exit(0);
-				sel = item;
-				if (sel) {
-					drawmenu();
-				}
-				return;
-			}
-		}
-	} else if (matches) {
-		/* left-click on left arrow */
-		x += inputw;
-		w = TEXTW(leftarrow);
-		if (prev && curr->left) {
-			if (ev->x >= x && ev->x <= x + w) {
-				sel = curr = prev;
-				calcoffsets();
-				drawmenu();
-				return;
-			}
-		}
-		/* horizontal list: (ctrl)left-click on item */
-		for (item = curr; item != next; item = item->right) {
-			x += w;
-			w = MIN(TEXTW(item->text), mw - x - TEXTW(rightarrow));
-			if (ev->x >= x && ev->x <= x + w) {
-				puts(item->text);
-				if (!(ev->state & ControlMask))
-					exit(0);
-				sel = item;
-				if (sel) {
-					drawmenu();
-				}
-				return;
-			}
-		}
-		/* left-click on right arrow */
-		w = TEXTW(rightarrow);
-		x = mw - w;
-		if (next && ev->x >= x && ev->x <= x + w) {
-			sel = curr = next;
-			calcoffsets();
-			drawmenu();
-			return;
-		}
-	}
 }
 
 void
@@ -1207,8 +761,10 @@ readstdin(void)
 	char buf[sizeof text], *p;
 	size_t i, imax = 0, itemsiz = 0;
 	unsigned int tmpmax = 0;
+    #if USEIMAGE
     int w, h;
     char *limg = NULL;
+    #endif
 
 	if (passwd){
     	inputw = lines = 0;
@@ -1226,6 +782,7 @@ readstdin(void)
 			*p = '\0';
 		if (!(items[i].text = strdup(buf)))
 			die("cannot strdup %u bytes:", strlen(buf) + 1);
+        items[i].hp = arrayhas(hpitems, hplength, items[i].text);
 		drw_font_getexts(drw->font, buf, strlen(buf), &tmpmax, NULL, True);
 		if (tmpmax > inputw) {
 			inputw = tmpmax;
@@ -1238,8 +795,6 @@ readstdin(void)
             if(!(items[i].image = malloc(strlen(items[i].text)+1)))
                 fprintf(stderr, "spmenu: cannot malloc %lu bytes\n", strlen(items[i].text));
             if(sscanf(items[i].text, "IMG:%[^\t]", items[i].image)) {
-                if(!(items[i].image = realloc(items[i].image, strlen(items[i].image)+1)))
-                    fprintf(stderr, "spmenu: cannot realloc %lu bytes\n", strlen(items[i].image)+1);
                 items[i].text += strlen("IMG:")+strlen(items[i].image)+1;
             } else {
                 free(items[i].image);
@@ -1293,67 +848,24 @@ readstdin(void)
 }
 
 void
-run(void)
-{
-	XEvent ev;
-
-	while (!XNextEvent(dpy, &ev)) {
-		if (XFilterEvent(&ev, win))
-			continue;
-		switch(ev.type) {
-		case DestroyNotify:
-			if (ev.xdestroywindow.window != win)
-				break;
-			cleanup();
-			exit(1);
-		case ButtonPress:
-			buttonpress(&ev);
-			break;
-		case Expose:
-			if (ev.xexpose.count == 0)
-				drw_map(drw, win, 0, 0, mw, mh);
-			break;
-		case FocusIn:
-			/* regrab focus from parent window */
-			if (ev.xfocus.window != win)
-				grabfocus();
-			break;
-		case KeyPress:
-			keypress(&ev);
-			break;
-		case SelectionNotify:
-			if (ev.xselection.property == utf8)
-				pastesel();
-			break;
-		case VisibilityNotify:
-			if (ev.xvisibility.state != VisibilityUnobscured)
-				XRaiseWindow(dpy, win);
-			break;
-		}
-
-        #if USEIMAGE
-        drawimage();
-        #endif
-	}
-}
-
-void
 setup(void)
 {
-	int x, y, i, j;
+	int x, y, i;
+    #if USEXINERAMA
+    int j, di;
+    #endif
 	unsigned int du;
     unsigned int tmp, minstrlen = 0, curstrlen = 0;
     int numwidthchecks = 100;
     struct item *item;
 	XIM xim;
 	Window w, dw, *dws;
+    XWindowAttributes wa;
     #if USEXINERAMA
 	XineramaScreenInfo *info;
 	Window pw;
-	int a, di, n, area = 0;
+	int a, n, area = 0;
     #endif
-    XWindowAttributes wa;
-    char cbuf[8];
 
     /* init appearance */
     init_appearance();
@@ -1396,6 +908,7 @@ setup(void)
             }
         }
     }
+
     #if USEXINERAMA
 	i = 0;
 	if (parentwin == root && (info = XineramaQueryScreens(dpy, &n))) {
@@ -1425,10 +938,12 @@ setup(void)
 		if (centered) {
 			mw = MIN(MAX(max_textw() + promptw, minwidth), info[i].width);
 			x = info[i].x_org + ((info[i].width  - mw) / 2);
+			//y = info[i].y_org + 0;
 			y = info[i].y_org + ((info[i].height - mh) / 2);
 		} else {
 		    x = info[i].x_org + dmx;
 			y = info[i].y_org + (menuposition ? 0 : info[i].height - mh - dmy);
+			//y = info[i].y_org + 0;
 			mw = (dmw>0 ? dmw : info[i].width);
 		}
 
@@ -1496,42 +1011,45 @@ main(int argc, char *argv[])
     longestedge = MAX(imagewidth, imageheight);
 
     if (mode) {
-        selkeys = 1;
+        curMode = 1;
         allowkeys = 1;
 
         strcpy(modetext, instext);
     } else {
-        selkeys = 0;
-        allowkeys = !selkeys;
+        curMode = 0;
+        allowkeys = !curMode;
 
         strcpy(modetext, normtext);
     }
 
 	if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
 		fputs("warning: no locale support\n", stderr);
-	if (!(dpy = XOpenDisplay(NULL)))
-		die("cannot open display");
-	screen = DefaultScreen(dpy);
+
+        if (!(dpy = XOpenDisplay(NULL)))
+		die("spmenu: cannot open display");
+
+    screen = DefaultScreen(dpy);
 	root = RootWindow(dpy, screen);
-	if (!embed || !(parentwin = strtol(embed, NULL, 0)))
+
+    if (!embed || !(parentwin = strtol(embed, NULL, 0)))
 		parentwin = root;
-	if (!XGetWindowAttributes(dpy, parentwin, &wa))
-		die("could not get embedding window attributes: 0x%lx",
-		    parentwin);
+
+    if (!XGetWindowAttributes(dpy, parentwin, &wa))
+		die("spmenu: could not get embedding window attributes: 0x%lx", parentwin);
+
 	xinitvisual();
 	drw = drw_create(dpy, screen, root, wa.width, wa.height, visual, depth, cmap);
 
-	if (!drw_font_create(drw, font))
+	if (!drw_font_create(drw, font, LENGTH(font)))
 	    die("no fonts could be loaded.");
 	lrpad = drw->font->h;
 
-	sp = menupaddingh;
-	vp = (menuposition == 1) ? menupaddingv : - menupaddingv;
+    prepare_window_size();
 
-#ifdef __OpenBSD__
+    #ifdef __OpenBSD__
 	if (pledge("stdio rpath", NULL) == -1)
 		die("pledge");
-#endif
+    #endif
 
 	loadhistory();
 
@@ -1542,8 +1060,16 @@ main(int argc, char *argv[])
 		readstdin();
 		grabkeyboard();
 	}
+
+    /* set values which we can restore later */
+    if (!imagew || !imageh || !imageg) {
+        imagew = imagewidth;
+        imageh = imageheight;
+        imagegaps = imagegaps;
+    }
+
 	setup();
-	run();
+	eventloop();
 
 	return 1; /* unreachable */
 }

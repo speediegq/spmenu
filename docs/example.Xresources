@@ -4,6 +4,10 @@ spmenu.col_itemnormfg:     #bbbbbb
 spmenu.col_itemnormbg:     #222222
 spmenu.col_itemselfg:      #eeeeee
 spmenu.col_itemselbg:      #35638A
+spmenu.col_itemnormprifg:  #bbbbbb
+spmenu.col_itemnormpribg:  #222222
+spmenu.col_itemselprifg:   #eeeeee
+spmenu.col_itemselpribg:   #35638A
 spmenu.col_menubgcolor:    #222222
 spmenu.col_promptfg:       #eeeeee
 spmenu.col_promptbg:       #35526b
@@ -56,6 +60,7 @@ spmenu.colorprompt:        1
 spmenu.preselected:        0
 spmenu.type:               1
 spmenu.class:              spmenu
+spmenu.mon:                -1
 spmenu.leftarrow:          <
 spmenu.rightarrow:         >
 spmenu.password:           .
@@ -63,7 +68,7 @@ spmenu.imagewidth:         86
 spmenu.imageheight:        86
 spmenu.imagegaps:          0
 spmenu.imageposition:      0
-spmenu.generatecache:      0
+spmenu.generatecache:      1
 spmenu.mode:               0
 spmenu.fast:               0
 spmenu.hidematchcount:     0
@@ -79,9 +84,9 @@ spmenu.instext:            Insert
 spmenu.pango_item:         1
 spmenu.pango_prompt:       1
 spmenu.pango_input:        1
-spmenu.pango_leftarrow:    1
-spmenu.pango_rightarrow:   1
-spmenu.pango_numbers:      1
-spmenu.pango_mode:         1
-spmenu.pango_password:     1
+spmenu.pango_leftarrow:    0
+spmenu.pango_rightarrow:   0
+spmenu.pango_numbers:      0
+spmenu.pango_mode:         0
+spmenu.pango_password:     0
 spmenu.pango_highlight:    1

@@ -1,28 +1,35 @@
 void
 drawhighlights(struct item *item, int x, int y, int maxw)
 {
-	int i, indent;
-	char *highlight;
-	char c;
-
-	if (!(strlen(item->text) && strlen(text)))
-		return;
+	char restorechar, tokens[sizeof text], *highlight,  *token;
+	int indentx, highlightlen;
+	char *itemtext = item->text;
 
 	drw_setscheme(drw, scheme[item == sel ? SchemeSelHighlight : SchemeNormHighlight]);
-	for (i = 0, highlight = item->text; *highlight && text[i];) {
-		if (!fstrncmp(&text[i], highlight, 1)) {
-			c = highlight[1];
-			highlight[1] = '\0';
+	strcpy(tokens, text);
 
-			/* get indentation */
-			indent = TEXTW(item->text);
+	for (token = strtok(tokens, " "); token; token = strtok(NULL, " ")) {
+		highlight = fstrstr(itemtext, token);
+		while (highlight) {
+			highlightlen = highlight - itemtext;
+			restorechar = *highlight;
+			itemtext[highlightlen] = '\0';
+			indentx = TEXTW(itemtext);
+			itemtext[highlightlen] = restorechar;
 
-			/* highlight character */
-			drw_text(drw, x + indent - lrpad, y, MIN(maxw - indent, TEXTW(highlight) - lrpad), bh, 0, highlight, 0, pango_highlight ? True : False);
-			highlight[1] = c;
-			i++;
+			restorechar = highlight[strlen(token)];
+			highlight[strlen(token)] = '\0';
+
+			if (indentx - (lrpad / 2) - 1 < maxw)
+				drw_text(drw, x + indentx - (lrpad / 2) - 1, y, MIN(maxw - indentx, TEXTW(highlight) - lrpad), bh, 0, highlight, 0, pango_highlight ? True : False);
+
+			highlight[strlen(token)] = restorechar;
+
+			if (strlen(highlight) - strlen(token) < strlen(token))
+				break;
+
+			highlight = fstrstr(highlight + strlen(token), token);
 		}
-		highlight++;
 	}
 }
 
@@ -33,16 +40,24 @@ drawitem(struct item *item, int x, int y, int w)
     Clr scm[3];
     int lp = lrpad / 2; /* padding */
     int wr, rd;
-	int rw; /* width of text */
+	int rw = 0; /* width of text */
+    int orw = 0;
 	int fg = 7;
 	int bg = 0;
     int bgfg = 0;
+    int ignore = 0;
     int ib = 0;
 
     if (item == sel) {
         memcpy(scm, scheme[SchemeItemSel], sizeof(scm));
+
+        if (item->hp)
+            memcpy(scm, scheme[SchemeItemSelPri], sizeof(scm));
     } else {
         memcpy(scm, scheme[SchemeItemNorm], sizeof(scm));
+
+        if (item->hp)
+            memcpy(scm, scheme[SchemeItemNormPri], sizeof(scm));
     }
 
     /* set scheme */
@@ -56,12 +71,12 @@ drawitem(struct item *item, int x, int y, int w)
 			if (item->text[rd + alen + 2] == 'm') { /* character is 'm' which is the last character in the sequence */
 				buffer[wr] = '\0'; /* clear out character */
 
-                /* draw text */
-                rw = TEXTWM(buffer) - lrpad;
                 apply_fribidi(buffer);
+                rw = MIN(w, TEXTW(buffer) - lrpad);
 				drw_text(drw, x, y, rw + lp, bh, lp, isrtl ? fribidi_text : buffer, 0, pango_item ? True : False);
 
 				x += rw + lp;
+                orw += rw;
                 ib = 1;
                 lp = 0; /* no padding */
 
@@ -70,6 +85,22 @@ drawitem(struct item *item, int x, int y, int w)
                 /* parse hex colors in scm */
 				while (*ep != 'm') {
 					unsigned v = strtoul(ep + 1, &ep, 10);
+                    if (ignore)
+						continue;
+					if (bgfg) {
+						if (bgfg < 4 && v == 5) {
+							bgfg <<= 1;
+							continue;
+						}
+						if (bgfg == 4)
+							scm[0] = textclrs[fg = v];
+						else if (bgfg == 6)
+							scm[1] = textclrs[bg = v];
+						ignore = 1;
+
+						continue;
+					}
+
 					if (v == 1) {
 						fg |= 8;
 						scm[0] = textclrs[fg];
@@ -103,9 +134,11 @@ drawitem(struct item *item, int x, int y, int w)
 
 	buffer[wr] = '\0';
 
+    w -= orw;
+
     /* draw any text that doesn't use sgr sequences */
     apply_fribidi(buffer);
-	int r = drw_text(drw, x, y, w - rw, bh, lp, isrtl ? fribidi_text : buffer, 0, pango_item ? True : False);
+	int r = drw_text(drw, x, y, w, bh, lp, isrtl ? fribidi_text : buffer, 0, pango_item ? True : False);
 
     if (!hidehighlight && !ib) drawhighlights(item, x, y, w - rw);
     return r;
@@ -114,9 +147,12 @@ drawitem(struct item *item, int x, int y, int w)
 void
 drawmenu(void)
 {
-	unsigned int curpos;
+	unsigned int curpos = 0;
 	struct item *item;
 	int x = 0, y = 0, fh = drw->font->h, w;
+    #if USEIMAGE
+    int ox = 0;
+    #endif
 	char *censort;
 
 	drw_setscheme(drw, scheme[SchemeMenu]);
@@ -136,6 +172,9 @@ drawmenu(void)
 		    drw_setscheme(drw, scheme[SchemePrompt]);
         }
 
+        #if USEIMAGE
+        ox = x;
+        #endif
 		x = drw_text(drw, x, 0, promptw, bh, lrpad / 2, prompt, 0, pango_prompt ? True : False);
 	}
 	/* draw input field */
@@ -175,7 +214,8 @@ drawmenu(void)
         /* draw image first */
         #if USEIMAGE
         if (!hideimage && longestedge != 0) {
-            x += imagegaps + imagewidth;
+            x = ox;
+            x += (imagegaps * 2) + imagewidth;
         }
         #endif
 
