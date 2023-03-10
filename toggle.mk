@@ -21,7 +21,5 @@ PANGOTOGGLE    = -DPANGO
 
 # Image support
 # Comment these lines if you don't need it.
-#IMLIB2LIBS     = -lImlib2
-#IMLIB2TOGGLE   = -DIMAGE
-IMLIB2LIBS =
-IMLIB2TOGGLE =
+IMLIB2LIBS     = -lImlib2
+IMLIB2TOGGLE   = -DIMAGE
